@@ -593,6 +593,7 @@ function applySeason(name) {
 }
 
 const map = new maplibregl.Map({
+  attributionControl: false, // 下で追加 (スマホでは小さく畳んだ表示にする)
   container: 'map',
   center: [138.5, 38.5],
   zoom: 5,
@@ -770,6 +771,17 @@ const map = new maplibregl.Map({
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.ScaleControl(), 'bottom-right');
+map.addControl(
+  new maplibregl.AttributionControl({
+    compact: window.matchMedia('(max-width: 600px), (max-height: 500px)').matches,
+  }),
+  'bottom-right',
+);
+// MapLibre の小さい表示は最初だけ開いた状態になるので、読み込み後に畳む (ⓘ で開ける)
+const foldAttribution = () =>
+  document.querySelectorAll('.maplibregl-ctrl-attrib.maplibregl-compact-show').forEach((el) => el.classList.remove('maplibregl-compact-show'));
+map.once('load', foldAttribution);
+map.once('idle', foldAttribution);
 
 map.on('load', () => {
   map.setTerrain({ source: 'dem', exaggeration: Number(exagInput.value) });
@@ -867,6 +879,11 @@ const stopBtn = $('stop');
 
 let current = null; // { resort, features, runs, lifts, bounds }
 let loadToken = 0;
+
+// スマホ縦向き・横向き (画面が狭い/低い) かどうか
+function isCompactScreen() {
+  return window.matchMedia('(max-width: 600px), (max-height: 500px)').matches;
+}
 
 function setStatus(text) {
   statusEl.classList.remove('error');
@@ -1238,6 +1255,8 @@ function analyzePath(item) {
     }
   }
   const hs = profile.map((p) => p.h);
+  // 地形タイルが読み込まれる前は標高が 0 になる (スキー場が海抜0mのことはない) ので、未取得として扱う
+  if (hs.every((h) => Math.abs(h) < 1)) return null;
   const top = Math.max(...hs);
   const bottom = Math.min(...hs);
   const drop = Math.abs(profile.at(-1).h - profile[0].h);
@@ -1320,6 +1339,20 @@ function updateProfileMarker(item, d) {
   marker.setAttribute('cx', 34 + (d / a.total) * (svg.width - 40));
   marker.setAttribute('cy', 8 + (1 - (a.profile[i].h - a.bottom) / range) * (svg.height - 24));
   marker.setAttribute('visibility', 'visible');
+  // 最小化中に見える進み具合のバー
+  const bar = document.getElementById('info-progress-bar');
+  if (bar) bar.style.width = `${Math.min(100, (d / a.total) * 100).toFixed(1)}%`;
+}
+
+// 詳細カードの最小化 (名前と進み具合だけ表示)
+function setInfoMinimized(min) {
+  $('info').classList.toggle('minimized', min);
+  const btn = $('info').querySelector('.minimize');
+  if (btn) {
+    btn.textContent = min ? '▢' : '—';
+    btn.setAttribute('aria-label', min ? '説明を開く' : '説明を最小化');
+    btn.title = min ? '説明を開く' : '説明を最小化';
+  }
 }
 
 function renderInfo(item) {
@@ -1346,7 +1379,10 @@ function renderInfo(item) {
   if (!isLift && item.lit === 'yes') stats.push(['ナイター', 'あり']);
 
   info.innerHTML = `
-    <button class="close" aria-label="閉じる">×</button>
+    <div class="info-buttons">
+      <button class="minimize" aria-label="説明を最小化" title="説明を最小化">—</button>
+      <button class="close" aria-label="閉じる" title="閉じる">×</button>
+    </div>
     <div class="info-area">${escapeHtml(item.area || '')}</div>
     <div class="info-head">${badge}<h3>${escapeHtml(item.name)}</h3></div>
     ${item.nameEn ? `<div class="name-en">${escapeHtml(item.nameEn)}</div>` : ''}
@@ -1355,8 +1391,15 @@ function renderInfo(item) {
     <dl class="stats">${stats.map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>
     ${a ? profileSvg(a, isLift ? '#d4a800' : diff.color === '#111111' ? '#333' : diff.color) : ''}
     <button class="go">${isLift ? '🚡 乗ってみる' : '⛷ このコースを滑る'}</button>
-    <p class="note">標高・斜度は国土地理院の標高データ(約10mメッシュ)からの推定値。コース情報は OpenStreetMap。</p>`;
+    <p class="note">標高・斜度は国土地理院の標高データ(約10mメッシュ)からの推定値。コース情報は OpenStreetMap。</p>
+    <div class="info-progress"><div id="info-progress-bar"></div></div>`;
   info.hidden = false;
+  setInfoMinimized(info.classList.contains('minimized'));
+  info.querySelector('.minimize').addEventListener('click', () => setInfoMinimized(!info.classList.contains('minimized')));
+  // 最小化中はヘッダー部分のタップでも開ける
+  info.querySelector('.info-head').addEventListener('click', () => {
+    if (info.classList.contains('minimized')) setInfoMinimized(false);
+  });
   info.querySelector('.close').addEventListener('click', () => {
     stopTour();
     hideInfo();
@@ -1367,6 +1410,7 @@ function renderInfo(item) {
 function hideInfo() {
   selected = null;
   $('info').hidden = true;
+  setInfoMinimized(false);
   setHighlight(null);
 }
 
@@ -1388,8 +1432,11 @@ async function ensureAnalysis(item) {
     duration: 1500,
     maxZoom: 15.5,
   });
-  await waitForIdle();
-  if (!item.analysis) item.analysis = analyzePath(item);
+  // 通信が遅いと地形の読み込みが間に合わないので、数回待ち直す
+  for (let attempt = 0; attempt < 4 && !item.analysis; attempt++) {
+    await waitForIdle(attempt === 0 ? 6000 : 5000);
+    item.analysis = analyzePath(item);
+  }
   item.analyzed = true;
   return item.analysis;
 }
@@ -1463,8 +1510,9 @@ async function startPathTour(item) {
   tour.paused = false;
   updatePauseButton();
   setFreeLook(true);
-  // スマホではパネルが景色を隠すので畳む
-  if (window.innerWidth <= 600) $('panel').classList.add('collapsed');
+  // 景色が見えるよう、説明は最小化し、スマホ(縦・横)ではパネルも畳む
+  setInfoMinimized(true);
+  if (isCompactScreen()) $('panel').classList.add('collapsed');
   let d = 0;
   let heading = bearing(path.at(0), path.at(60));
   let cam = null; // 平滑化したカメラ位置 { pos, alt }
