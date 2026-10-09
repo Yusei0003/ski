@@ -18,3 +18,19 @@ window.buildOsmQuery = function (bbox) {
 );
 out geom;`;
 };
+
+// 建物と施設 (リフト乗り場・レストランなど) の問い合わせ。resorts.js で buildings: true のエリアだけ取得する。
+window.buildBuildingQuery = function (bbox) {
+  const b = bbox.join(',');
+  return `[out:json][timeout:180];
+(
+  way["building"](${b});
+  relation["building"](${b});
+  way["building:part"](${b});
+  nwr["aerialway"="station"](${b});
+  nwr["amenity"~"^(restaurant|cafe|fast_food|food_court|bar|pub|toilets|first_aid|clinic|information|parking|ticket_validator)$"](${b});
+  nwr["tourism"~"^(hotel|information|alpine_hut|guest_house|chalet|hostel)$"](${b});
+  nwr["shop"](${b});
+);
+out geom;`;
+};

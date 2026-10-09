@@ -76,6 +76,7 @@ window.RESORTS = [
     sub: '岩手県八幡平市',
     center: [140.98, 39.95],
     bbox: [39.9, 140.92, 40.01, 141.05],
+    buildings: true, // 建物を立体表示する (data/appi-buildings.js)
     areas: [{ name: '安比高原スキー場', match: /安比|appi/i, center: [140.98, 39.95] }],
     landmarks: [
       { name: '岩手山', lngLat: [141.0011, 39.8522], elevation: 2038 },
