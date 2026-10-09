@@ -12,6 +12,35 @@
   <canvas id="snow" aria-hidden="true"></canvas>
   <div id="info" hidden></div>
 
+  <!-- フライト中だけ表示する視点コントローラー (ボタンは押している間ずっと効く) -->
+  <div id="flight-hud" role="toolbar" aria-label="フライト中の視点操作">
+    <div class="hud-group">
+      <span class="hud-label">左右</span>
+      <button id="hud-left" aria-label="左へ回り込む">◀</button>
+      <button id="hud-right" aria-label="右へ回り込む">▶</button>
+    </div>
+    <div class="hud-group">
+      <span class="hud-label">上下</span>
+      <button id="hud-up" aria-label="高く">▲</button>
+      <button id="hud-down" aria-label="低く">▼</button>
+    </div>
+    <div class="hud-group">
+      <span class="hud-label">遠近</span>
+      <button id="hud-near" aria-label="近づく">＋</button>
+      <button id="hud-far" aria-label="離れる">－</button>
+    </div>
+    <div class="hud-group">
+      <span class="hud-label">視線</span>
+      <button id="hud-look-up" aria-label="遠くの景色を見る">⤴</button>
+      <button id="hud-look-down" aria-label="足元を見る">⤵</button>
+    </div>
+    <div class="hud-group">
+      <button id="hud-pause" class="wide">⏸ 一時停止</button>
+      <button id="hud-reset" class="wide">↺ 戻す</button>
+      <button id="hud-stop" class="wide">■ 終了</button>
+    </div>
+  </div>
+
   <aside id="panel">
     <header>
       <h1>スキー場3Dビューア</h1>
@@ -70,7 +99,7 @@
           <button data-camera="side">横から</button>
           <button data-camera="top">上空から</button>
         </div>
-        <p class="hint free-look-hint">フライト中: ドラッグで回り込み、上下ドラッグで高さ、ホイールで距離 <button id="reset-look">視点を戻す</button></p>
+        <p class="hint free-look-hint">フライト中: ドラッグで回り込み・上下ドラッグで高さ・Shift+上下ドラッグで視線・ホイール/ピンチで遠近。キーは ←→ 回り込み / ↑↓ 高さ / W・S 遠近 / R・F 視線 / Space 一時停止 <button id="reset-look">視点を戻す</button></p>
         <label class="row">速度
           <input id="speed" type="range" min="0.5" max="4" step="0.5" value="1.5">
           <span id="speed-label">×1.5</span>

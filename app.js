@@ -1460,7 +1460,11 @@ async function startPathTour(item) {
   const baseSpeed = isLift ? 12 : 18; // [m/s] 実際より速め
   tour.kind = 'path';
   tour.isLift = isLift;
+  tour.paused = false;
+  updatePauseButton();
   setFreeLook(true);
+  // スマホではパネルが景色を隠すので畳む
+  if (window.innerWidth <= 600) $('panel').classList.add('collapsed');
   let d = 0;
   let heading = bearing(path.at(0), path.at(60));
   let cam = null; // 平滑化したカメラ位置 { pos, alt }
@@ -1473,7 +1477,8 @@ async function startPathTour(item) {
     if (!tour || tour.token !== token) return;
     const dt = lastTime == null ? 0 : Math.min(0.1, (time - lastTime) / 1000);
     lastTime = time;
-    d += baseSpeed * Number(speedInput.value) * dt;
+    applyHeldKeys(dt);
+    if (!tour.paused) d += baseSpeed * Number(speedInput.value) * dt;
     updateProfileMarker(item, Math.min(d, path.total));
 
     if (d >= path.total) {
@@ -1534,34 +1539,60 @@ const CAMERA_MODES = {
   top: { label: '上空から', dist: 70, yaw: 0, height: 420 },
 };
 let cameraMode = 'chase';
-// ドラッグ・ホイールで加える視点のずれ
-const freeLook = { yaw: 0, heightScale: 1, distScale: 1 };
+// ドラッグ・ホイール・ボタン・キーで加える視点のずれ
+//   yaw … 滑走者の周りを回り込む角度 / heightScale … 高さの倍率 / distScale … 距離の倍率
+//   tilt … 視線 (+ で遠くの山や空のほう、- で足元のほう)
+const freeLook = { yaw: 0, heightScale: 1, distScale: 1, tilt: 0 };
+const FREE_LOOK_LIMITS = { height: [0.3, 10], dist: [0.3, 8], tilt: [-0.6, 1] };
+const clamp = (v, [lo, hi]) => Math.min(hi, Math.max(lo, v));
+
+function adjustYaw(deg) {
+  freeLook.yaw = (freeLook.yaw + deg) % 360;
+}
+function adjustHeight(factor) {
+  freeLook.heightScale = clamp(freeLook.heightScale * factor, FREE_LOOK_LIMITS.height);
+}
+function adjustDistance(factor) {
+  freeLook.distScale = clamp(freeLook.distScale * factor, FREE_LOOK_LIMITS.dist);
+}
+function adjustTilt(delta) {
+  freeLook.tilt = clamp(freeLook.tilt + delta, FREE_LOOK_LIMITS.tilt);
+}
 
 function cameraFor(mode, { pos, heading, groundHere, isLift, ahead, ground }) {
   const m = CAMERA_MODES[mode];
   const exag = Number(exagInput.value);
+  const tilt = freeLook.tilt;
   if (mode === 'pov') {
-    // 自分の目線: 進行方向の先を見る (リフトはワイヤーの高さ)
+    // 自分の目線: 進行方向の先を見る (リフトはワイヤーの高さ)。距離の倍率は見る先の遠さに使う
     const eye = (isLift ? 12 : m.height) * freeLook.heightScale;
     const lookDir = heading + freeLook.yaw;
-    const lookPos = freeLook.yaw === 0 ? ahead(120) : destination(pos, lookDir, 120);
+    const lookDist = Math.max(20, 120 * freeLook.distScale * (tilt < 0 ? 1 + tilt : 1));
+    const lookPos = freeLook.yaw === 0 && freeLook.distScale === 1 && tilt >= 0 ? ahead(lookDist) : destination(pos, lookDir, lookDist);
     const lookGround = ground(lookPos, groundHere);
+    const baseLookAlt = isLift ? Math.max(lookGround, groundHere) + eye * exag * 0.6 : lookGround + 1.5 * exag;
     return {
       camPos: pos,
       camAlt: groundHere + eye * exag,
       lookPos,
-      lookAlt: isLift ? Math.max(lookGround, groundHere) + eye * exag * 0.6 : lookGround + 1.5 * exag,
+      lookAlt: baseLookAlt + Math.max(0, tilt) * lookDist * 0.8,
     };
   }
   const dist = m.dist * freeLook.distScale;
   const camPos = destination(pos, heading + 180 + m.yaw + freeLook.yaw, dist);
   const camGround = ground(camPos, groundHere);
-  return {
-    camPos,
-    camAlt: Math.max(camGround, groundHere) + m.height * freeLook.heightScale * exag,
-    lookPos: pos,
-    lookAlt: groundHere,
-  };
+  const camAlt = Math.max(camGround, groundHere) + m.height * freeLook.heightScale * exag;
+  // 視線を上げると、注視点を前方の高い位置にずらして遠くの山並みが入るようにする
+  const viewDir = heading + m.yaw + freeLook.yaw;
+  let lookPos = pos;
+  let lookAlt = groundHere;
+  if (tilt > 0) {
+    lookPos = destination(pos, viewDir, tilt * (600 + dist));
+    lookAlt = groundHere + tilt * (camAlt - groundHere);
+  } else if (tilt < 0) {
+    lookPos = destination(pos, viewDir + 180, -tilt * dist * 0.7);
+  }
+  return { camPos, camAlt, lookPos, lookAlt };
 }
 
 function setCameraMode(mode) {
@@ -1574,7 +1605,50 @@ function resetFreeLook() {
   freeLook.yaw = 0;
   freeLook.heightScale = 1;
   freeLook.distScale = 1;
+  freeLook.tilt = 0;
 }
+
+function togglePause() {
+  if (tour?.kind !== 'path') return;
+  tour.paused = !tour.paused;
+  updatePauseButton();
+}
+
+function updatePauseButton() {
+  const paused = !!tour?.paused;
+  $('hud-pause').textContent = paused ? '▶ 再開' : '⏸ 一時停止';
+  $('hud-pause').classList.toggle('active', paused);
+}
+
+// キーボード (押している間ずっと効く): ←→ 回り込み / ↑↓ 高さ / W S 近く・遠く / R F 視線 / Space 一時停止
+const heldKeys = new Set();
+const KEY_ACTIONS = {
+  ArrowLeft: (dt) => adjustYaw(-60 * dt),
+  ArrowRight: (dt) => adjustYaw(60 * dt),
+  ArrowUp: (dt) => adjustHeight(Math.exp(dt * 1.2)),
+  ArrowDown: (dt) => adjustHeight(Math.exp(-dt * 1.2)),
+  KeyW: (dt) => adjustDistance(Math.exp(-dt * 1.2)),
+  KeyS: (dt) => adjustDistance(Math.exp(dt * 1.2)),
+  KeyR: (dt) => adjustTilt(dt * 0.6),
+  KeyF: (dt) => adjustTilt(-dt * 0.6),
+};
+function applyHeldKeys(dt) {
+  for (const code of heldKeys) KEY_ACTIONS[code]?.(dt);
+}
+window.addEventListener('keydown', (e) => {
+  if (tour?.kind !== 'path' || e.target.closest?.('input, textarea')) return;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (!e.repeat) togglePause();
+  } else if (e.code === 'Escape') {
+    stopTour();
+  } else if (KEY_ACTIONS[e.code]) {
+    e.preventDefault();
+    heldKeys.add(e.code);
+  }
+});
+window.addEventListener('keyup', (e) => heldKeys.delete(e.code));
+window.addEventListener('blur', () => heldKeys.clear());
 
 document.querySelectorAll('[data-camera]').forEach((b) => b.addEventListener('click', () => setCameraMode(b.dataset.camera)));
 $('reset-look').addEventListener('click', resetFreeLook);
@@ -1589,23 +1663,40 @@ function setFreeLook(on) {
 
 {
   const container = map.getCanvasContainer();
-  let drag = null;
+  // 1本指/マウス: 左右で回り込み・上下で高さ、2本指: ピンチで距離
+  const pointers = new Map();
+  let pinchDist = null;
+  const spread = () => {
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
   container.addEventListener('pointerdown', (e) => {
     if (tour?.kind !== 'path') return;
-    drag = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     container.setPointerCapture(e.pointerId);
+    pinchDist = pointers.size === 2 ? spread() : null;
   });
   container.addEventListener('pointermove', (e) => {
-    if (!drag || drag.id !== e.pointerId || tour?.kind !== 'path') return;
-    const dx = e.clientX - drag.x;
-    const dy = e.clientY - drag.y;
-    drag.x = e.clientX;
-    drag.y = e.clientY;
-    freeLook.yaw = (freeLook.yaw - dx * 0.35) % 360;
-    freeLook.heightScale = Math.min(6, Math.max(0.3, freeLook.heightScale * Math.exp(dy * 0.006)));
+    const p = pointers.get(e.pointerId);
+    if (!p || tour?.kind !== 'path') return;
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    if (pointers.size >= 2) {
+      const now = spread();
+      if (pinchDist) adjustDistance(pinchDist / now);
+      pinchDist = now;
+      return;
+    }
+    adjustYaw(-dx * 0.35);
+    // Shift を押しながら上下ドラッグで視線、それ以外は高さ
+    if (e.shiftKey) adjustTilt(-dy * 0.004);
+    else adjustHeight(Math.exp(dy * 0.006));
   });
   const end = (e) => {
-    if (drag && drag.id === e.pointerId) drag = null;
+    pointers.delete(e.pointerId);
+    pinchDist = null;
   };
   container.addEventListener('pointerup', end);
   container.addEventListener('pointercancel', end);
@@ -1614,7 +1705,7 @@ function setFreeLook(on) {
     (e) => {
       if (tour?.kind !== 'path') return;
       e.preventDefault();
-      freeLook.distScale = Math.min(4, Math.max(0.3, freeLook.distScale * Math.exp(e.deltaY * 0.0015)));
+      adjustDistance(Math.exp(e.deltaY * 0.0015));
     },
     { passive: false },
   );
@@ -1651,9 +1742,10 @@ document.querySelectorAll('[data-pitch]').forEach((b) =>
 // 押している間だけ回転・傾ける
 function holdButton(btn, onFrame) {
   let frame = 0;
-  let last = 0;
+  let last = null;
   const loop = (t) => {
-    const dt = Math.min(0.1, (t - last) / 1000 || 0);
+    // 最初のフレームは時間の基準にするだけ (rAF の時刻は押した瞬間より前のことがあり、差が負になる)
+    const dt = last == null ? 0 : Math.min(0.1, Math.max(0, (t - last) / 1000));
     last = t;
     onFrame(dt);
     frame = requestAnimationFrame(loop);
@@ -1661,7 +1753,7 @@ function holdButton(btn, onFrame) {
   const start = (e) => {
     e.preventDefault();
     stopOrbitOnly();
-    last = performance.now();
+    last = null;
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(loop);
   };
@@ -1673,21 +1765,34 @@ function holdButton(btn, onFrame) {
 const ROTATE_SPEED = 45; // 度/秒
 const TILT_SPEED = 30;
 holdButton($('rot-left'), (dt) => {
-  if (tour?.kind === 'path') freeLook.yaw -= ROTATE_SPEED * dt;
+  if (tour?.kind === 'path') adjustYaw(-ROTATE_SPEED * dt);
   else map.jumpTo({ bearing: map.getBearing() - ROTATE_SPEED * dt });
 });
 holdButton($('rot-right'), (dt) => {
-  if (tour?.kind === 'path') freeLook.yaw += ROTATE_SPEED * dt;
+  if (tour?.kind === 'path') adjustYaw(ROTATE_SPEED * dt);
   else map.jumpTo({ bearing: map.getBearing() + ROTATE_SPEED * dt });
 });
 holdButton($('tilt-up'), (dt) => {
-  if (tour?.kind === 'path') freeLook.heightScale = Math.min(6, freeLook.heightScale * Math.exp(dt * 1.2));
+  if (tour?.kind === 'path') adjustHeight(Math.exp(dt * 1.2));
   else map.jumpTo({ pitch: Math.max(0, map.getPitch() - TILT_SPEED * dt) });
 });
 holdButton($('tilt-down'), (dt) => {
-  if (tour?.kind === 'path') freeLook.heightScale = Math.max(0.3, freeLook.heightScale * Math.exp(-dt * 1.2));
+  if (tour?.kind === 'path') adjustHeight(Math.exp(-dt * 1.2));
   else map.jumpTo({ pitch: Math.min(85, map.getPitch() + TILT_SPEED * dt) });
 });
+
+// フライト中に画面下に出るコントローラー
+holdButton($('hud-left'), (dt) => adjustYaw(-ROTATE_SPEED * dt));
+holdButton($('hud-right'), (dt) => adjustYaw(ROTATE_SPEED * dt));
+holdButton($('hud-up'), (dt) => adjustHeight(Math.exp(dt * 1.2)));
+holdButton($('hud-down'), (dt) => adjustHeight(Math.exp(-dt * 1.2)));
+holdButton($('hud-near'), (dt) => adjustDistance(Math.exp(-dt * 1.2)));
+holdButton($('hud-far'), (dt) => adjustDistance(Math.exp(dt * 1.2)));
+holdButton($('hud-look-up'), (dt) => adjustTilt(dt * 0.6));
+holdButton($('hud-look-down'), (dt) => adjustTilt(-dt * 0.6));
+$('hud-pause').addEventListener('click', togglePause);
+$('hud-reset').addEventListener('click', resetFreeLook);
+$('hud-stop').addEventListener('click', stopTour);
 
 $('orbit').addEventListener('click', async () => {
   if (!current) return;

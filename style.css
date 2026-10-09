@@ -199,6 +199,45 @@ button.active { background: var(--accent); color: #fff; border-color: var(--acce
 body.free-look .free-look-hint { display: block; }
 body.free-look #map { cursor: grab; }
 
+/* フライト中の視点コントローラー */
+#flight-hud {
+  display: none;
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(20, 30, 45, 0.72);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(4px);
+  max-width: calc(100% - 24px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+body.free-look #flight-hud { display: flex; }
+/* 左のパネルと重ならないよう、地図の見えている部分の中央に置く */
+@media (min-width: 901px) {
+  #flight-hud { left: calc(50% + 162px); max-width: calc(100% - 360px); }
+}
+.hud-group { display: flex; align-items: center; gap: 4px; }
+.hud-label { color: #dfe8f2; font-size: 11px; margin-right: 2px; }
+#flight-hud button {
+  min-width: 40px;
+  height: 40px;
+  padding: 0 8px;
+  font-size: 16px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(255, 255, 255, 0.92);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#flight-hud button.wide { font-size: 13px; }
+#flight-hud button:active, #flight-hud button.active { background: #ffd54f; }
+
 /* スキー場名 */
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chips button { font-size: 12px; padding: 4px 8px; border-radius: 14px; }
@@ -268,6 +307,8 @@ body.hide-area-labels .area-label { display: none; }
     max-height: 55%;
     border-radius: 10px 10px 0 0;
   }
+  #flight-hud { bottom: 70px; gap: 6px; padding: 6px; }
+  #flight-hud button { min-width: 36px; height: 36px; }
   #info {
     top: 8px;
     left: 8px;
