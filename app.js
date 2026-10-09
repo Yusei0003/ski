@@ -195,6 +195,7 @@ function readCache(id) {
     const raw = localStorage.getItem(CACHE_PREFIX + id);
     if (!raw) return null;
     const { time, data } = JSON.parse(raw);
+    if (!data?.elements?.length) return null; // 以前の不具合で保存された空データは使わない
     return { data, time, expired: Date.now() - time > CACHE_TTL_MS };
   } catch {
     return null;
