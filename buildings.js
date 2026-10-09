@@ -542,12 +542,12 @@ const buildings3d = (() => {
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, 64, 64);
-    ctx.fillStyle = '#4a5666';
-    ctx.fillRect(14, 16, 36, 26);
-    ctx.fillStyle = '#6d7b8c';
-    ctx.fillRect(14, 16, 36, 6);
-    ctx.fillStyle = '#d9d4cc';
-    ctx.fillRect(10, 42, 44, 3); // 窓の下の縁
+    ctx.fillStyle = '#66768a';
+    ctx.fillRect(16, 18, 32, 22);
+    ctx.fillStyle = '#8fa0b3'; // 空が映った上の方
+    ctx.fillRect(16, 18, 32, 7);
+    ctx.fillStyle = '#e4e0d8';
+    ctx.fillRect(13, 40, 38, 3); // 窓の下の縁
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.colorSpace = THREE.SRGBColorSpace;

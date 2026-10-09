@@ -29,6 +29,9 @@
   - フライト中は画面下にコントローラーが出る:**左右**(回り込み)・**上下**(高さ)・**遠近**(距離)・**視線**(遠くの山並み⇔足元)・**一時停止**・戻す・終了。ボタンは押している間ずっと効く
   - マウス:ドラッグで回り込み・上下ドラッグで高さ・Shift+上下ドラッグで視線・ホイールで遠近 / スマホ:ドラッグ・ピンチ
   - キーボード:←→ 回り込み / ↑↓ 高さ / W・S 遠近 / R・F 視線 / Space 一時停止 / Esc 終了
+- **建物の立体表示**(いまは安比高原のみ):OpenStreetMap の建物の形から、屋根(切妻・寄棟・平屋根)と窓のある建物を立体で表示。冬は屋根に雪が積もる。近づくとリフト乗り場・レストラン・ホテル・温泉などの名前を表示
+  - 高さは OSM の `height` / `building:levels` → `resorts.js` の `buildingOverrides`(主なホテルの補正)→ 建物の種類と面積からの推定、の順で決める
+  - 地面の高さは国土地理院の標高タイルから建物ごとに求め、斜面の建物は下側の壁が地面まで伸びる
 - **空撮で一周** → スキー場の周りを旋回
 - 速度・起伏の強調度を調整可能。地図をドラッグするとフライトは止まる
 
@@ -56,7 +59,8 @@ GitHub Pages(Settings → Pages → Branch を選択)でそのまま公開する
 | 3D地図エンジン | [MapLibre GL JS](https://maplibre.org/) 5.24.0 |
 | 標高(地形) | [国土地理院 標高タイル (dem_png)](https://maps.gsi.go.jp/development/ichiran.html)。ブラウザ内でMapLibre用の形式に変換 |
 | 航空写真 | [国土地理院 シームレス空中写真](https://maps.gsi.go.jp/development/ichiran.html) |
-| コース・リフト | © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)(Overpass API で取得、ブラウザに7日間キャッシュ) |
+| 建物の立体表示 | [three.js](https://threejs.org/) 0.169.0 |
+| コース・リフト・建物 | © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)(Overpass API で取得、ブラウザに7日間キャッシュ) |
 
 ## コースデータの自動更新(GitHub Actions)
 
@@ -66,7 +70,10 @@ GitHub Pages(Settings → Pages → Branch を選択)でそのまま公開する
 - 今すぐ更新したいとき:GitHub のリポジトリ → **Actions** タブ → 「コースデータ更新」→ **Run workflow**
 - エリアを追加したとき(`resorts.js` を編集したとき)も、上の手順で一度実行するとすぐデータが入ります
 - 手元で実行する場合:`node scripts/fetch-osm-data.mjs`(特定のエリアだけなら `node scripts/fetch-osm-data.mjs hakuba`)
+- `resorts.js` で `buildings: true` のエリアは、建物・施設も `data/<エリアID>-buildings.js` に保存します
+- 特定のエリアだけ更新したいときは、Run workflow の入力欄にエリアID(例: `appi`)を入れます
 - 公開リポジトリなので GitHub Actions の利用は無料です
+- 画面の確認用に「画面の撮影」ワークフローもあります(本物の地図タイルで撮影して `screenshots/` に保存)
 
 ## コースデータの取得に失敗したとき
 
