@@ -11,11 +11,7 @@ const GSI_ATTRIBUTION =
 const OSM_ATTRIBUTION =
   '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a>';
 
-const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.private.coffee/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-];
+const OVERPASS_ENDPOINTS = window.OVERPASS_ENDPOINTS; // osm-query.js
 const CACHE_PREFIX = 'ski3d:osm:v2:';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -177,16 +173,18 @@ function makePathSampler(coords) {
 // OpenStreetMap からコース・リフトを取得
 // ---------------------------------------------------------------------------
 
-function buildQuery(bbox) {
-  const b = bbox.join(',');
-  return `[out:json][timeout:120];
-(
-  way["piste:type"="downhill"](${b});
-  way["aerialway"~"^(cable_car|gondola|mixed_lift|chair_lift|drag_lift|t-bar|j-bar|platter|rope_tow|magic_carpet)$"](${b});
-  way["landuse"="winter_sports"](${b});
-  relation["landuse"="winter_sports"](${b});
-);
-out geom;`;
+const buildQuery = window.buildOsmQuery; // osm-query.js
+
+// GitHub Actions が週1回保存している data/<id>.json を読む (無ければ null)
+async function fetchBundledData(id) {
+  try {
+    const res = await fetch(`data/${id}.json`, { cache: 'no-cache' });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json?.elements?.length ? json : null;
+  } catch {
+    return null; // file:// で開いた場合など
+  }
 }
 
 // 期限切れのキャッシュも、取得に失敗したときの予備として返す
@@ -919,8 +917,14 @@ async function selectResort(resort) {
   areaMarkers = [];
 
   const cached = readCache(resort.id);
-  let osm = cached && !cached.expired ? cached.data : null;
+  let osm = null;
   let notice = '';
+  // 1. リポジトリに保存済みのデータ → 2. ブラウザのキャッシュ → 3. Overpass API から直接取得
+  setStatus('コース・リフトのデータを読み込み中…');
+  const bundled = await fetchBundledData(resort.id);
+  if (token !== loadToken) return;
+  if (bundled) osm = bundled;
+  else if (cached && !cached.expired) osm = cached.data;
   if (!osm) {
     try {
       osm = await fetchOverpass(buildQuery(resort.bbox), (n, total) => {

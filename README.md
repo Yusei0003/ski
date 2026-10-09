@@ -53,9 +53,19 @@ GitHub Pages(Settings → Pages → Branch を選択)でそのまま公開する
 | 航空写真 | [国土地理院 シームレス空中写真](https://maps.gsi.go.jp/development/ichiran.html) |
 | コース・リフト | © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)(Overpass API で取得、ブラウザに7日間キャッシュ) |
 
+## コースデータの自動更新(GitHub Actions)
+
+コース・リフトのデータは GitHub Actions が**週1回(月曜 3:17 頃)** OpenStreetMap から取得し、`data/<エリアID>.json` に保存します。
+アプリはまずこのファイルを読むので、Overpass API の混雑の影響を受けません(ファイルが無いエリアだけ直接取得します)。
+
+- 今すぐ更新したいとき:GitHub のリポジトリ → **Actions** タブ → 「コースデータ更新」→ **Run workflow**
+- エリアを追加したとき(`resorts.js` を編集したとき)も、上の手順で一度実行するとすぐデータが入ります
+- 手元で実行する場合:`node scripts/fetch-osm-data.mjs`(特定のエリアだけなら `node scripts/fetch-osm-data.mjs hakuba`)
+- 公開リポジトリなので GitHub Actions の利用は無料です
+
 ## コースデータの取得に失敗したとき
 
-コース・リフトのデータは、表示するたびに OpenStreetMap の無料サーバー(Overpass API)から取得しています。
+`data/` に保存済みのデータが無いエリアは、表示するたびに OpenStreetMap の無料サーバー(Overpass API)から取得しています。
 このサーバーは世界中で共用されているため、混雑していると取得に失敗することがあります。
 
 1. 表示されたメッセージの下の **「↻ 再試行」** を押す(1〜2分おくと成功しやすい)

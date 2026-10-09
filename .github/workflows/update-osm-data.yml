@@ -1,0 +1,41 @@
+# OpenStreetMap からスキー場のコース・リフトのデータを取得して data/ に保存する。
+# 週1回自動で実行されるほか、Actions タブの「Run workflow」からいつでも実行できる。
+name: コースデータ更新
+
+on:
+  schedule:
+    - cron: '17 18 * * 0' # 毎週月曜 3:17 (日本時間)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-osm-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: OpenStreetMap からデータを取得
+        run: node scripts/fetch-osm-data.mjs
+
+      - name: 変更があればコミット
+        run: |
+          git add data/
+          if git diff --cached --quiet; then
+            echo "データに変更はありません"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "コースデータを更新 ($(date -u +%Y-%m-%d))"
+          git push
