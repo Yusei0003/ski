@@ -248,6 +248,70 @@ body.free-look #flight-hud { display: flex; }
 #flight-hud button.wide { font-size: 13px; white-space: nowrap; }
 #flight-hud button:active, #flight-hud button.active { background: #ffd54f; }
 
+/* 写真と比べる */
+.wide-btn { width: 100%; font-weight: bold; }
+#compare {
+  position: absolute;
+  top: 12px;
+  right: 56px;
+  width: 320px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  border-radius: 10px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  overflow: hidden;
+}
+#compare[hidden] { display: none; }
+.cmp-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 8px 14px; background: #e65100; color: #fff; }
+.cmp-head h3 { margin: 0; font-size: 15px; }
+.cmp-head-buttons button { background: none; border: none; color: #fff; font-size: 18px; padding: 2px 8px; }
+#compare.minimized .cmp-body { display: none; }
+.cmp-body { overflow-y: auto; padding: 4px 14px 12px; }
+.cmp-steps { margin: 0; padding-left: 18px; }
+.cmp-steps li { margin: 10px 0; }
+.cmp-steps li > b { display: block; margin-bottom: 6px; }
+.cmp-steps li.disabled { opacity: 0.45; pointer-events: none; }
+.cmp-steps button { width: 100%; margin: 3px 0; }
+.cmp-steps .seg button, .cmp-steps .chips button { width: auto; }
+.cmp-steps .chips { margin-bottom: 4px; }
+.file-btn {
+  display: block;
+  text-align: center;
+  padding: 7px 10px;
+  border: 1px solid #c6d0dc;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.file-btn input { display: none; }
+#cmp-thumb { display: block; width: 100%; max-height: 120px; object-fit: cover; border-radius: 6px; margin-top: 6px; }
+#cmp-thumb[hidden] { display: none; }
+#cmp-title { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid #c6d0dc; border-radius: 6px; }
+button.primary, #cmp-make { background: #e65100; color: #fff; border-color: #e65100; font-weight: bold; }
+button.primary:disabled { background: #f0b48f; border-color: #f0b48f; }
+.compare-pick-hint { display: none; color: #e65100; font-weight: bold; }
+body.compare-picking .compare-pick-hint { display: block; }
+body.compare-picking #map { cursor: crosshair; }
+.compare-marker { font-size: 30px; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5)); }
+#compare-result {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 16px;
+  z-index: 10;
+}
+#compare-result[hidden] { display: none; }
+.cmp-result-card { background: #fff; border-radius: 10px; padding: 12px; max-width: 520px; max-height: 100%; display: flex; flex-direction: column; gap: 10px; }
+#cmp-preview { max-width: 100%; max-height: calc(100vh - 140px); object-fit: contain; border-radius: 6px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; flex: 1; padding: 7px 10px; border: 1px solid #c6d0dc; border-radius: 6px; background: #fff; color: inherit; text-decoration: none; font-size: 13px; }
+.cmp-result-card .row button { flex: 1; }
+
 /* スキー場名 */
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chips button { font-size: 12px; padding: 4px 8px; border-radius: 14px; }
@@ -338,6 +402,7 @@ body.hide-area-labels .area-label { display: none; }
     width: auto;
     max-height: 42%;
   }
+  #compare { top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 50%; border-radius: 10px 10px 0 0; z-index: 5; }
 }
 
 /* スマホ横向き (高さが低い画面) */
@@ -382,4 +447,8 @@ body.hide-area-labels .area-label { display: none; }
   .hud-group { gap: 3px; }
   .hud-group + .hud-group { padding-left: 6px; border-left: 1px solid rgba(255, 255, 255, 0.25); }
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl-scale { display: none; }
+}
+
+@media (max-height: 500px) and (orientation: landscape) {
+  #compare { top: 6px; right: max(52px, calc(env(safe-area-inset-right) + 46px)); width: 280px; max-height: calc(100% - 12px); }
 }

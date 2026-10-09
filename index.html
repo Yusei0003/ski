@@ -12,6 +12,65 @@
   <canvas id="snow" aria-hidden="true"></canvas>
   <div id="info" hidden></div>
 
+  <!-- 写真と比べる (比較画像づくり) -->
+  <div id="compare" hidden>
+    <div class="cmp-head">
+      <h3>📷 写真と比べる</h3>
+      <div class="cmp-head-buttons">
+        <button id="compare-min" title="小さくする">—</button>
+        <button id="compare-close" title="閉じる">×</button>
+      </div>
+    </div>
+    <div class="cmp-body">
+      <ol class="cmp-steps">
+        <li>
+          <b>写真を選ぶ</b>
+          <label class="file-btn">写真を選択<input id="cmp-photo" type="file" accept="image/*"></label>
+          <img id="cmp-thumb" alt="" hidden>
+        </li>
+        <li>
+          <b>撮影した場所に立つ</b>
+          <button id="cmp-from-course" disabled>コースを選ぶとスタート地点に立てます</button>
+          <button id="cmp-pick">地図をタップして選ぶ</button>
+          <p id="cmp-place" class="hint"></p>
+          <p class="hint compare-pick-hint">撮影した場所を地図でタップしてください</p>
+        </li>
+        <li id="cmp-step-view">
+          <b>向きを写真に合わせる</b> <span class="hint">ドラッグでも動かせます</span>
+          <div id="cmp-landmarks" class="chips"></div>
+          <div class="seg">
+            <button id="cmp-left">◀ 左</button>
+            <button id="cmp-right">右 ▶</button>
+            <button id="cmp-up">⤴ 上</button>
+            <button id="cmp-down">⤵ 下</button>
+          </div>
+          <label class="row">画角 <input id="cmp-fov" type="range" min="20" max="70" step="1" value="45"> <span id="cmp-fov-label">45°</span></label>
+          <p id="cmp-direction" class="hint"></p>
+        </li>
+        <li>
+          <b>画像を作る</b>
+          <input id="cmp-title" type="text" maxlength="40">
+          <div class="row">
+            <label><input type="radio" name="cmp-layout" value="vertical" checked> 上下 (4:5)</label>
+            <label><input type="radio" name="cmp-layout" value="square"> 左右 (1:1)</label>
+          </div>
+          <label class="row check"><input id="cmp-lines" type="checkbox"> コース・リフトの線を入れる</label>
+          <button id="cmp-make" class="primary" disabled>比較画像を作る</button>
+        </li>
+      </ol>
+    </div>
+  </div>
+  <div id="compare-result" hidden>
+    <div class="cmp-result-card">
+      <img id="cmp-preview" alt="比較画像">
+      <div class="row">
+        <button id="cmp-share" class="primary">共有(インスタなど)</button>
+        <a id="cmp-download" download="ski-compare.jpg" class="btn">保存</a>
+        <button id="cmp-result-close">閉じる</button>
+      </div>
+    </div>
+  </div>
+
   <!-- フライト中だけ表示する視点コントローラー (ボタンは押している間ずっと効く) -->
   <div id="flight-hud" role="toolbar" aria-label="フライト中の視点操作">
     <div class="hud-group">
@@ -87,6 +146,10 @@
         </div>
       </section>
 
+      <section>
+        <button id="open-compare" class="wide-btn">📷 写真と比べる(比較画像を作る)</button>
+      </section>
+
       <section id="tour-controls">
         <h2>フライト</h2>
         <div class="row">
@@ -133,5 +196,6 @@
   <script src="resorts.js"></script>
   <script src="osm-query.js"></script>
   <script src="app.js"></script>
+  <script src="compare.js"></script>
 </body>
 </html>

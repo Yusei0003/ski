@@ -1175,7 +1175,7 @@ for (const layer of ['runs-hit', 'lifts-hit']) {
     hoverPopup.remove();
   });
   map.on('click', layer, (e) => {
-    if (!current) return;
+    if (!current || (typeof compare !== 'undefined' && compare.picking)) return;
     const f = e.features[0];
     const list = layer === 'runs-hit' ? current.runs : current.lifts;
     const name = f.properties.kind === 'lift' ? f.properties.name || LIFT_TYPES[f.properties.liftType] || 'リフト' : f.properties.name || '名称なしコース';
@@ -1415,6 +1415,11 @@ function hideInfo() {
 }
 
 async function selectItem(item) {
+  // 「写真と比べる」を開いている間は、撮影地点の候補として使う
+  if (typeof compare !== 'undefined' && compare.active) {
+    setCompareCourse(item);
+    return;
+  }
   stopTour();
   selected = item;
   setHighlight(item.coords);
