@@ -1,5 +1,5 @@
 // resorts.js の各エリアについて OpenStreetMap からコース・リフト・スキー場範囲を取得し、
-// data/<id>.json に保存する。GitHub Actions (.github/workflows/update-osm-data.yml) から週1回実行される。
+// data/<id>.js に保存する。GitHub Actions (.github/workflows/update-osm-data.yml) から週1回実行される。
 //
 //   node scripts/fetch-osm-data.mjs            全エリア
 //   node scripts/fetch-osm-data.mjs hakuba     指定したエリアだけ
@@ -75,6 +75,16 @@ function slim(osm) {
   });
 }
 
+// アプリがファイルを直接開いた (file://) ときも読めるよう、JSON ではなく <script> で読める形で保存する
+const DATA_PREFIX = 'window.SKI_DATA = window.SKI_DATA || {};\nwindow.SKI_DATA[';
+function toDataScript(id, body) {
+  return `${DATA_PREFIX}${JSON.stringify(id)}] = ${JSON.stringify(body)};\n`;
+}
+function parseDataScript(text) {
+  const start = text.indexOf('] = ') + 4;
+  return JSON.parse(text.slice(start, text.lastIndexOf(';')));
+}
+
 const { RESORTS, OVERPASS_ENDPOINTS, buildOsmQuery } = await loadBrowserScripts();
 const endpoints = process.env.OVERPASS_ENDPOINTS ? process.env.OVERPASS_ENDPOINTS.split(',') : OVERPASS_ENDPOINTS;
 const only = process.argv.slice(2);
@@ -88,16 +98,16 @@ for (const [i, resort] of targets.entries()) {
   try {
     const osm = await fetchWithRetry(endpoints, buildOsmQuery(resort.bbox));
     const elements = slim(osm);
-    const file = path.join(OUT_DIR, `${resort.id}.json`);
-    const previous = await readFile(file, 'utf8').then(JSON.parse).catch(() => null);
+    const file = path.join(OUT_DIR, `${resort.id}.js`);
+    const previous = await readFile(file, 'utf8').then(parseDataScript).catch(() => null);
     if (previous && JSON.stringify(previous.elements) === JSON.stringify(elements)) {
-      console.log(`  変更なし: data/${resort.id}.json (${elements.length} 件)`);
+      console.log(`  変更なし: data/${resort.id}.js (${elements.length} 件)`);
       ok++;
       continue;
     }
     const body = { generated: new Date().toISOString(), source: 'OpenStreetMap contributors (ODbL)', elements };
-    await writeFile(file, JSON.stringify(body) + '\n');
-    console.log(`  保存しました: data/${resort.id}.json (${elements.length} 件)`);
+    await writeFile(file, toDataScript(resort.id, body));
+    console.log(`  保存しました: data/${resort.id}.js (${elements.length} 件)`);
     ok++;
   } catch (e) {
     console.error(`  ${resort.name} の取得に失敗しました。既存のファイルを残します。\n${e.message}`);

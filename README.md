@@ -55,7 +55,7 @@ GitHub Pages(Settings → Pages → Branch を選択)でそのまま公開する
 
 ## コースデータの自動更新(GitHub Actions)
 
-コース・リフトのデータは GitHub Actions が**週1回(月曜 3:17 頃)** OpenStreetMap から取得し、`data/<エリアID>.json` に保存します。
+コース・リフトのデータは GitHub Actions が**週1回(月曜 3:17 頃)** OpenStreetMap から取得し、`data/<エリアID>.js` に保存します。
 アプリはまずこのファイルを読むので、Overpass API の混雑の影響を受けません(ファイルが無いエリアだけ直接取得します)。
 
 - 今すぐ更新したいとき:GitHub のリポジトリ → **Actions** タブ → 「コースデータ更新」→ **Run workflow**

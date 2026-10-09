@@ -175,16 +175,24 @@ function makePathSampler(coords) {
 
 const buildQuery = window.buildOsmQuery; // osm-query.js
 
-// GitHub Actions が週1回保存している data/<id>.json を読む (無ければ null)
-async function fetchBundledData(id) {
-  try {
-    const res = await fetch(`data/${id}.json`, { cache: 'no-cache' });
-    if (!res.ok) return null;
-    const json = await res.json();
-    return json?.elements?.length ? json : null;
-  } catch {
-    return null; // file:// で開いた場合など
-  }
+// GitHub Actions が週1回保存している data/<id>.js を読む (無ければ null)。
+// fetch() で JSON を読む方法だとファイルを直接開いた (file://) ときにブラウザに拒否されるため、
+// <script> タグで読み込み、data/<id>.js が window.SKI_DATA[id] にデータを入れる形にしている。
+function fetchBundledData(id) {
+  const loaded = () => {
+    const data = window.SKI_DATA?.[id];
+    return data?.elements?.length ? data : null;
+  };
+  if (loaded()) return Promise.resolve(loaded());
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    // 公開サーバーでは古いデータがキャッシュされ続けないよう1時間ごとに URL を変える
+    const bust = location.protocol === 'file:' ? '' : `?h=${Math.floor(Date.now() / 3600000)}`;
+    script.src = `data/${id}.js${bust}`;
+    script.onload = () => resolve(loaded());
+    script.onerror = () => resolve(null);
+    document.head.appendChild(script);
+  });
 }
 
 // 期限切れのキャッシュも、取得に失敗したときの予備として返す
