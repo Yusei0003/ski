@@ -179,7 +179,7 @@ function makePathSampler(coords) {
 
 function buildQuery(bbox) {
   const b = bbox.join(',');
-  return `[out:json][timeout:60];
+  return `[out:json][timeout:120];
 (
   way["piste:type"="downhill"](${b});
   way["aerialway"~"^(cable_car|gondola|mixed_lift|chair_lift|drag_lift|t-bar|j-bar|platter|rope_tow|magic_carpet)$"](${b});
@@ -189,13 +189,13 @@ function buildQuery(bbox) {
 out geom;`;
 }
 
+// 期限切れのキャッシュも、取得に失敗したときの予備として返す
 function readCache(id) {
   try {
     const raw = localStorage.getItem(CACHE_PREFIX + id);
     if (!raw) return null;
     const { time, data } = JSON.parse(raw);
-    if (Date.now() - time > CACHE_TTL_MS) return null;
-    return data;
+    return { data, time, expired: Date.now() - time > CACHE_TTL_MS };
   } catch {
     return null;
   }
@@ -209,23 +209,60 @@ function writeCache(id, data) {
   }
 }
 
-async function fetchOverpass(query) {
-  let lastError;
-  for (const endpoint of OVERPASS_ENDPOINTS) {
+class FetchError extends Error {
+  constructor(reason, detail) {
+    super(detail);
+    this.reason = reason; // 'offline' | 'busy' | 'timeout' | 'other'
+  }
+}
+
+const FETCH_TIMEOUT_MS = 90 * 1000;
+
+// Overpass API のサーバーを順番に試す。onProgress には何台目を試しているかを渡す
+async function fetchOverpass(query, onProgress) {
+  if (navigator.onLine === false) throw new FetchError('offline', 'navigator.onLine = false');
+  const errors = [];
+  for (const [i, endpoint] of OVERPASS_ENDPOINTS.entries()) {
+    onProgress?.(i + 1, OVERPASS_ENDPOINTS.length);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'data=' + encodeURIComponent(query),
+        signal: controller.signal,
       });
-      if (!res.ok) throw new Error(`${endpoint}: HTTP ${res.status}`);
-      return await res.json();
+      if (res.status === 429 || res.status === 503 || res.status === 504) {
+        throw new FetchError(res.status === 504 ? 'timeout' : 'busy', `${endpoint}: HTTP ${res.status}`);
+      }
+      if (!res.ok) throw new FetchError('other', `${endpoint}: HTTP ${res.status}`);
+      const json = await res.json();
+      // サーバー側でタイムアウトすると HTTP 200 のまま remark にエラーが入り、データが空で返ってくる
+      if (json.remark && /error|timed out|out of memory/i.test(json.remark)) {
+        throw new FetchError('timeout', `${endpoint}: ${json.remark}`);
+      }
+      return json;
     } catch (e) {
-      lastError = e;
+      errors.push(
+        e instanceof FetchError ? e : new FetchError(e.name === 'AbortError' ? 'timeout' : 'other', `${endpoint}: ${e.message}`),
+      );
+    } finally {
+      clearTimeout(timer);
     }
   }
-  throw lastError;
+  if (navigator.onLine === false) throw new FetchError('offline', 'offline');
+  // 全サーバーで失敗。混雑・タイムアウトがあればそれを理由として返す
+  const reason = errors.find((e) => e.reason === 'busy' || e.reason === 'timeout')?.reason || 'other';
+  throw new FetchError(reason, errors.map((e) => e.message).join(' / '));
 }
+
+const FETCH_ERROR_MESSAGES = {
+  offline: 'インターネットに接続されていません。接続を確認してから再試行してください。',
+  busy: 'コースデータのサーバー(OpenStreetMap / Overpass API)が混み合っています。1〜2分おいてから再試行してください。',
+  timeout: 'コースデータの取得に時間がかかりすぎて中断されました。サーバーが混んでいる可能性があります。少しおいてから再試行してください。',
+  other: 'コースデータを取得できませんでした。少しおいてから再試行してください。',
+};
 
 function osmName(tags) {
   return tags['name:ja'] || tags.name || tags['piste:name'] || tags['name:en'] || tags.ref || '';
@@ -790,7 +827,22 @@ let current = null; // { resort, features, runs, lifts, bounds }
 let loadToken = 0;
 
 function setStatus(text) {
+  statusEl.classList.remove('error');
   statusEl.textContent = text;
+}
+
+// 取得失敗のメッセージと「再試行」ボタンを表示する
+function showFetchError(message, retry) {
+  statusEl.classList.add('error');
+  statusEl.textContent = message;
+  const btn = document.createElement('button');
+  btn.textContent = '↻ 再試行';
+  btn.addEventListener('click', retry);
+  statusEl.appendChild(document.createElement('br'));
+  statusEl.appendChild(btn);
+  $('panel').classList.remove('collapsed');
+  $('lifts').innerHTML = '<li class="empty">データを取得できませんでした</li>';
+  $('runs').innerHTML = '<li class="empty">データを取得できませんでした</li>';
 }
 
 $('toggle-panel').addEventListener('click', () => $('panel').classList.toggle('collapsed'));
@@ -865,17 +917,27 @@ async function selectResort(resort) {
   for (const m of areaMarkers) m.remove();
   areaMarkers = [];
 
-  let osm = readCache(resort.id);
+  const cached = readCache(resort.id);
+  let osm = cached && !cached.expired ? cached.data : null;
+  let notice = '';
   if (!osm) {
-    setStatus('OpenStreetMap からコース・リフトを取得中…');
     try {
-      osm = await fetchOverpass(buildQuery(resort.bbox));
+      osm = await fetchOverpass(buildQuery(resort.bbox), (n, total) => {
+        if (token === loadToken) setStatus(`OpenStreetMap からコース・リフトを取得中…(サーバー ${n}/${total})`);
+      });
       writeCache(resort.id, osm);
     } catch (e) {
       if (token !== loadToken) return;
       console.error(e);
-      setStatus('コースデータの取得に失敗しました。時間をおいて再度お試しください。');
-      return;
+      if (cached) {
+        // 古いデータでも無いよりは良いので表示する
+        osm = cached.data;
+        const date = new Date(cached.time).toLocaleDateString('ja-JP');
+        notice = `※最新データを取得できなかったため、${date} に保存したデータを表示しています。`;
+      } else {
+        showFetchError(FETCH_ERROR_MESSAGES[e.reason] || FETCH_ERROR_MESSAGES.other, () => selectResort(resort));
+        return;
+      }
     }
   }
   if (token !== loadToken) return;
@@ -917,7 +979,8 @@ async function selectResort(resort) {
   renderAreaChips();
   renderItemLists();
   setStatus(
-    `${resort.name}: スキー場 ${areas.filter((a) => a.name !== 'その他').length} か所 / コース ${runs.length} 本 / リフト ${lifts.length} 本 (データ: OpenStreetMap)`,
+    `${resort.name}: スキー場 ${areas.filter((a) => a.name !== 'その他').length} か所 / コース ${runs.length} 本 / リフト ${lifts.length} 本 (データ: OpenStreetMap)` +
+      (notice ? '\n' + notice : ''),
   );
 }
 
