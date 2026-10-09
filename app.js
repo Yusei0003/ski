@@ -784,6 +784,16 @@ const foldAttribution = () =>
 map.once('load', foldAttribution);
 map.once('idle', foldAttribution);
 
+// MapLibre は移動アニメーション (flyTo / fitBounds など) の間「画面中心の地面の高さ」の更新を止めていて、
+// アニメーションが途中で止められる (ドラッグ・jumpTo など) と止めたままになる。すると中心の高さが古いまま
+// (読み込み直後は 0m) になり、大きくズームするとカメラが地面の下に入って空しか見えなくなる。
+// 移動が終わったときに止めたままなら解除する (MapLibre 内部の値を直接戻す)
+map.on('moveend', () => {
+  if (!map._elevationFreeze || map.isEasing()) return;
+  map._elevationFreeze = false;
+  map.triggerRepaint();
+});
+
 map.on('load', () => {
   map.setTerrain({ source: 'dem', exaggeration: Number(exagInput.value) });
   applySeason('winter');
