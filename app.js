@@ -398,13 +398,24 @@ function parseSkiAreaPolygons(osm) {
 }
 
 // エリア定義 (resorts.js の areas) と OSM の範囲を突き合わせて、スキー場の一覧を作る
-function buildAreas(osm, resort) {
+function buildAreas(osm, resort, features) {
   const polys = parseSkiAreaPolygons(osm);
-  const areas = (resort.areas || []).map((a) => ({ name: a.name, match: a.match, fallbackCenter: a.center, rings: [] }));
+  const areas = (resort.areas || []).map((a) => ({
+    name: a.name,
+    match: a.match,
+    liftMatch: a.lifts,
+    fallbackCenter: a.center,
+    rings: [],
+  }));
   for (const poly of polys) {
     if (!poly.name && !poly.nameEn) continue;
+    // 「白馬村 / Hakuba Valley」のように複数のスキー場をまとめて囲む範囲は使わない
+    const others = polys.filter((p) => p !== poly);
+    const contained = others.filter((p) => poly.rings.some((ring) => pointInRing(p.rings[0][0], ring)));
+    if (contained.length >= 2) continue;
     const label = poly.name + ' ' + poly.nameEn;
     let area = areas.find((a) => a.match && a.match.test(label));
+    if (area) area.curated = true;
     if (!area) {
       // 定義に無い名前付きのスキー場は自動で追加 (同名はまとめる)
       area = areas.find((a) => a.name === poly.name) || { name: poly.name || poly.nameEn, rings: [] };
@@ -412,6 +423,15 @@ function buildAreas(osm, resort) {
     }
     area.rings.push(...poly.rings);
   }
+  // リフト名で振り分けたリフト (範囲がまとまっているスキー場の判定に使う)
+  const anchors = [];
+  for (const f of features) {
+    if (f.properties.kind !== 'lift') continue;
+    const label = `${f.properties.name} ${f.properties.nameEn || ''}`;
+    const area = areas.find((a) => a.liftMatch && a.liftMatch.test(label));
+    if (area) anchors.push({ area, coords: f.geometry.coordinates });
+  }
+  areas.anchors = anchors;
   return areas;
 }
 
@@ -430,6 +450,21 @@ function assignArea(coords, areas) {
         }
       }
     }
+  }
+  // スキー場ごとの範囲が無い場合は、名前で振り分けたリフトのうち一番近いものに合わせる
+  if (!best?.curated && areas.anchors.length) {
+    let nearestAnchor = null;
+    let anchorDist = 2000;
+    for (const a of areas.anchors) {
+      for (const c of a.coords) {
+        const d = distance(mid, c);
+        if (d < anchorDist) {
+          anchorDist = d;
+          nearestAnchor = a.area;
+        }
+      }
+    }
+    if (nearestAnchor) return nearestAnchor;
   }
   if (best) return best;
   let nearest = null;
@@ -948,7 +983,7 @@ async function selectResort(resort) {
   if (token !== loadToken) return;
 
   const features = toFeatures(osm);
-  const areaList = buildAreas(osm, resort);
+  const areaList = buildAreas(osm, resort, features);
   for (const f of features) {
     const coords = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates;
     f.properties.area = assignArea(coords, areaList)?.name || 'その他';
