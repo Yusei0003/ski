@@ -1710,6 +1710,8 @@ $('reset-look').addEventListener('click', resetFreeLook);
 const INTERACTIONS = ['dragPan', 'dragRotate', 'scrollZoom', 'touchZoomRotate', 'touchPitch', 'doubleClickZoom', 'keyboard'];
 function setFreeLook(on) {
   for (const h of INTERACTIONS) map[h][on ? 'disable' : 'enable']();
+  // 視線を上げると注視点が空中になる。中心を地面に合わせ直す機能があるとカメラの高さがずれるので切る
+  map.setCenterClampedToGround(!on);
   setAreaLabelsVisible(!on);
   document.body.classList.toggle('free-look', on);
 }

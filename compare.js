@@ -14,7 +14,9 @@ const compare = {
   resultBlob: null,
   saved: null, // 開く前の表示設定 (閉じるときに戻す)
 };
-const EYE_HEIGHT = 3; // 目線の高さ [m] (地形データが粗いので少し高め)
+const EYE_HEIGHT = 5; // 目線の高さ [m] (地形データが約10m間隔と粗いので、実際の目線より少し高め)
+// 視線 (画面中心の向き) は水平の少し下まで。山頂などは画角の上半分に入る
+const clampLook = (deg) => Math.max(-45, Math.min(-1.5, deg));
 const SKI_LINE_LAYERS = ['run-areas', 'runs-casing', 'runs', 'lifts', 'lifts-dash', 'highlight', 'lift-labels', 'run-labels'];
 
 function openCompare() {
@@ -26,7 +28,8 @@ function openCompare() {
   compare.saved = { exag: exagInput.value, fov: map.getVerticalFieldOfView(), maxPitch: map.getMaxPitch() };
   // 実際の景色と比べるので起伏の強調はなし、視線を水平より上にも向けられるようにする
   setExaggeration(1);
-  map.setMaxPitch(110);
+  // 画面の中心が水平より上を向くと (pitch 90°超) 描画が崩れることがあるので、少し下向きまでに抑える
+  map.setMaxPitch(89);
   setAreaLabelsVisible(false);
   renderLandmarks();
   $('compare').hidden = false;
@@ -42,6 +45,7 @@ function closeCompare() {
   document.body.classList.remove('compare-picking', 'compare-view');
   $('compare').hidden = true;
   for (const h of INTERACTIONS) map[h].enable();
+  map.setCenterClampedToGround(true);
   if (compare.saved) {
     setExaggeration(Number(compare.saved.exag));
     map.setVerticalFieldOfView(compare.saved.fov);
@@ -125,6 +129,8 @@ async function setViewpoint(pos, bearingDeg, placeName) {
   if (!compare.active || compare.vp?.pos !== pos) return;
   document.body.classList.add('compare-view');
   for (const h of INTERACTIONS) map[h].disable();
+  // 画面中心を地面の高さに合わせ直す機能を切る (空中の一点を見るとカメラの高さがずれるため)
+  map.setCenterClampedToGround(false);
   setCompareMarker(null);
   applyViewpoint();
   // 遠くの地形が読み込まれると標高が変わるので、そのたびに合わせ直す
@@ -134,7 +140,9 @@ async function setViewpoint(pos, bearingDeg, placeName) {
 function applyViewpoint() {
   const vp = compare.vp;
   if (!compare.active || !vp || !document.body.classList.contains('compare-view')) return;
-  const ground = elevationAt(vp.pos, 0);
+  // 足元の地形の凹凸にめり込まないよう、周囲の一番高い所より上に目線を置く
+  let ground = elevationAt(vp.pos, 0);
+  for (let a = 0; a < 360; a += 45) ground = Math.max(ground, elevationAt(destination(vp.pos, a, 20), ground) - 2);
   const eyeAlt = ground + EYE_HEIGHT;
   const dist = 3000;
   const target = destination(vp.pos, vp.bearing, dist);
@@ -163,6 +171,7 @@ $('cmp-pick').addEventListener('click', () => {
   compare.picking = true;
   compare.vp = null;
   document.body.classList.remove('compare-view');
+  map.setCenterClampedToGround(true);
   for (const h of INTERACTIONS) map[h].enable();
   document.body.classList.add('compare-picking');
   updateCompareSteps();
@@ -186,7 +195,7 @@ function renderLandmarks() {
       // 山頂が画面の少し上に来るよう、見上げ角を山頂の高さから決める
       const d = distance(compare.vp.pos, lm.lngLat);
       const eye = elevationAt(compare.vp.pos, 0) + EYE_HEIGHT;
-      compare.vp.look = Math.max(-20, Math.min(15, toDeg(Math.atan((lm.elevation - eye) / d)) - 4));
+      compare.vp.look = clampLook(toDeg(Math.atan((lm.elevation - eye) / d)) - 4);
       applyViewpoint();
     });
     el.appendChild(b);
@@ -201,7 +210,7 @@ const turn = (deg) => {
 };
 const lookBy = (deg) => {
   if (!compare.vp) return;
-  compare.vp.look = Math.max(-45, Math.min(30, compare.vp.look + deg));
+  compare.vp.look = clampLook(compare.vp.look + deg);
   applyViewpoint();
 };
 holdButton($('cmp-left'), (dt) => turn(-25 * dt));
@@ -226,7 +235,7 @@ $('cmp-fov').addEventListener('input', (e) => {
     if (!last || last.id !== e.pointerId || !compare.active) return;
     const fovPerPx = map.getVerticalFieldOfView() / container.clientHeight;
     compare.vp.bearing -= (e.clientX - last.x) * fovPerPx;
-    compare.vp.look = Math.max(-45, Math.min(30, compare.vp.look + (e.clientY - last.y) * fovPerPx));
+    compare.vp.look = clampLook(compare.vp.look + (e.clientY - last.y) * fovPerPx);
     last = { x: e.clientX, y: e.clientY, id: e.pointerId };
     applyViewpoint();
   });
