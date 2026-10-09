@@ -32,12 +32,40 @@
         <label class="row check"><input id="snow-toggle" type="checkbox"> 雪を降らせる</label>
       </section>
 
+      <section>
+        <h2>視点 <small>右ドラッグ・2本指でも回せます</small></h2>
+        <div class="seg" role="group" aria-label="見る方角">
+          <button data-from="n">北から</button>
+          <button data-from="e">東から</button>
+          <button data-from="s">南から</button>
+          <button data-from="w">西から</button>
+        </div>
+        <div class="seg" role="group" aria-label="見る角度">
+          <button data-pitch="top">真上</button>
+          <button data-pitch="oblique">斜め</button>
+          <button data-pitch="low">低空</button>
+        </div>
+        <div class="seg" role="group" aria-label="回転・傾き(押している間)">
+          <button id="rot-left" aria-label="左に回す">↺ 左</button>
+          <button id="rot-right" aria-label="右に回す">右 ↻</button>
+          <button id="tilt-up" aria-label="上から見る">⤒ 上へ</button>
+          <button id="tilt-down" aria-label="横から見る">⤓ 下へ</button>
+        </div>
+      </section>
+
       <section id="tour-controls">
         <h2>フライト</h2>
         <div class="row">
           <button id="orbit">空撮で一周</button>
           <button id="stop" disabled>停止</button>
         </div>
+        <div class="seg" role="group" aria-label="フライト中のカメラ">
+          <button data-camera="chase" class="active">後ろから</button>
+          <button data-camera="pov">一人称</button>
+          <button data-camera="side">横から</button>
+          <button data-camera="top">上空から</button>
+        </div>
+        <p class="hint free-look-hint">フライト中: ドラッグで回り込み、上下ドラッグで高さ、ホイールで距離 <button id="reset-look">視点を戻す</button></p>
         <label class="row">速度
           <input id="speed" type="range" min="0.5" max="4" step="0.5" value="1.5">
           <span id="speed-label">×1.5</span>

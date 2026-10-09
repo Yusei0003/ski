@@ -1077,15 +1077,16 @@ let tour = null; // { frame, onStop }
 function stopTour() {
   if (!tour) return;
   cancelAnimationFrame(tour.frame);
+  if (tour.kind === 'path') setFreeLook(false);
   tour = null;
   stopBtn.disabled = true;
   $('orbit').classList.remove('active');
 }
 
 stopBtn.addEventListener('click', stopTour);
-// ユーザーが地図を操作したらフライトを止める
+// 空撮中にユーザーが地図を操作したら止める (コース/リフトのフライト中はドラッグで視点を回せる)
 for (const ev of ['mousedown', 'touchstart', 'wheel']) {
-  map.getCanvasContainer().addEventListener(ev, () => stopTour(), { passive: true });
+  map.getCanvasContainer().addEventListener(ev, () => tour?.kind === 'orbit' && stopTour(), { passive: true });
 }
 
 function waitForIdle(timeoutMs = 6000) {
@@ -1123,14 +1124,17 @@ async function startPathTour(item) {
   const coords = analysis ? analysis.coords : item.coords;
 
   const path = makePathSampler(coords);
-  const BACK = isLift ? 180 : 160; // カメラを置く後方距離 [m]
-  const CLEARANCE = isLift ? 45 : 50; // 地面からのカメラ高度 [m]
   const baseSpeed = isLift ? 12 : 18; // [m/s] 実際より速め
+  tour.kind = 'path';
+  tour.isLift = isLift;
+  setFreeLook(true);
   let d = 0;
   let heading = bearing(path.at(0), path.at(60));
-  let camAlt = null;
+  let cam = null; // 平滑化したカメラ位置 { pos, alt }
+  let look = null; // 平滑化した注視点 { pos, alt }
   let lastTime = null;
   let lastGround = elevationAt(coords[0], 0);
+  const ground = (p, fallback) => elevationAt(p, fallback);
 
   const step = (time) => {
     if (!tour || tour.token !== token) return;
@@ -1149,19 +1153,36 @@ async function startPathTour(item) {
     const pos = path.at(d);
     const desired = bearing(path.at(d - 40), path.at(d + 60));
     heading += angleDiff(heading, desired) * (1 - Math.exp(-dt * 1.8));
+    const groundHere = ground(pos, lastGround);
+    lastGround = groundHere;
+    const { camPos, camAlt, lookPos, lookAlt } = cameraFor(cameraMode, {
+      pos,
+      heading,
+      groundHere,
+      isLift,
+      ahead: (m) => path.at(d + m),
+      ground,
+    });
 
-    const camPos = destination(pos, heading + 180, BACK);
-    const groundTarget = elevationAt(pos, lastGround);
-    lastGround = groundTarget;
-    const groundCam = elevationAt(camPos, groundTarget);
-    const desiredAlt = Math.max(groundCam, groundTarget) + CLEARANCE * Number(exagInput.value);
-    camAlt = camAlt == null ? desiredAlt : camAlt + (desiredAlt - camAlt) * (1 - Math.exp(-dt * 2.5));
+    // モード切替やドラッグ操作でカメラが瞬間移動しないよう、位置をなめらかに追従させる
+    const k = cam ? 1 - Math.exp(-dt * 4) : 1;
+    const lerp = (from, to) => (from == null ? to : from + (to - from) * k);
+    cam = {
+      pos: [lerp(cam?.pos[0], camPos[0]), lerp(cam?.pos[1], camPos[1])],
+      alt: lerp(cam?.alt, camAlt),
+    };
+    look = {
+      pos: [lerp(look?.pos[0], lookPos[0]), lerp(look?.pos[1], lookPos[1])],
+      alt: lerp(look?.alt, lookAlt),
+    };
+    // 地形にめり込まないようにする
+    cam.alt = Math.max(cam.alt, ground(cam.pos, groundHere) + 3 * Number(exagInput.value));
 
     const opts = map.calculateCameraOptionsFromTo(
-      new maplibregl.LngLat(camPos[0], camPos[1]),
-      camAlt,
-      new maplibregl.LngLat(pos[0], pos[1]),
-      groundTarget,
+      new maplibregl.LngLat(cam.pos[0], cam.pos[1]),
+      cam.alt,
+      new maplibregl.LngLat(look.pos[0], look.pos[1]),
+      look.alt,
     );
     map.jumpTo(opts);
     tour.frame = requestAnimationFrame(step);
@@ -1169,12 +1190,178 @@ async function startPathTour(item) {
   tour.frame = requestAnimationFrame(step);
 }
 
+// ---------------------------------------------------------------------------
+// フライト中のカメラ (視点モード + ドラッグによる視点操作)
+// ---------------------------------------------------------------------------
+
+const CAMERA_MODES = {
+  chase: { label: '後ろから', dist: 160, yaw: 0, height: 50 },
+  pov: { label: '一人称', dist: 0, yaw: 0, height: 4 },
+  side: { label: '横から', dist: 230, yaw: 90, height: 60 },
+  top: { label: '上空から', dist: 70, yaw: 0, height: 420 },
+};
+let cameraMode = 'chase';
+// ドラッグ・ホイールで加える視点のずれ
+const freeLook = { yaw: 0, heightScale: 1, distScale: 1 };
+
+function cameraFor(mode, { pos, heading, groundHere, isLift, ahead, ground }) {
+  const m = CAMERA_MODES[mode];
+  const exag = Number(exagInput.value);
+  if (mode === 'pov') {
+    // 自分の目線: 進行方向の先を見る (リフトはワイヤーの高さ)
+    const eye = (isLift ? 12 : m.height) * freeLook.heightScale;
+    const lookDir = heading + freeLook.yaw;
+    const lookPos = freeLook.yaw === 0 ? ahead(120) : destination(pos, lookDir, 120);
+    const lookGround = ground(lookPos, groundHere);
+    return {
+      camPos: pos,
+      camAlt: groundHere + eye * exag,
+      lookPos,
+      lookAlt: isLift ? Math.max(lookGround, groundHere) + eye * exag * 0.6 : lookGround + 1.5 * exag,
+    };
+  }
+  const dist = m.dist * freeLook.distScale;
+  const camPos = destination(pos, heading + 180 + m.yaw + freeLook.yaw, dist);
+  const camGround = ground(camPos, groundHere);
+  return {
+    camPos,
+    camAlt: Math.max(camGround, groundHere) + m.height * freeLook.heightScale * exag,
+    lookPos: pos,
+    lookAlt: groundHere,
+  };
+}
+
+function setCameraMode(mode) {
+  cameraMode = mode;
+  resetFreeLook();
+  document.querySelectorAll('[data-camera]').forEach((b) => b.classList.toggle('active', b.dataset.camera === mode));
+}
+
+function resetFreeLook() {
+  freeLook.yaw = 0;
+  freeLook.heightScale = 1;
+  freeLook.distScale = 1;
+}
+
+document.querySelectorAll('[data-camera]').forEach((b) => b.addEventListener('click', () => setCameraMode(b.dataset.camera)));
+$('reset-look').addEventListener('click', resetFreeLook);
+
+// フライト中は地図の通常操作を止め、ドラッグをカメラの回り込みに使う
+const INTERACTIONS = ['dragPan', 'dragRotate', 'scrollZoom', 'touchZoomRotate', 'touchPitch', 'doubleClickZoom', 'keyboard'];
+function setFreeLook(on) {
+  for (const h of INTERACTIONS) map[h][on ? 'disable' : 'enable']();
+  document.body.classList.toggle('free-look', on);
+}
+
+{
+  const container = map.getCanvasContainer();
+  let drag = null;
+  container.addEventListener('pointerdown', (e) => {
+    if (tour?.kind !== 'path') return;
+    drag = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    container.setPointerCapture(e.pointerId);
+  });
+  container.addEventListener('pointermove', (e) => {
+    if (!drag || drag.id !== e.pointerId || tour?.kind !== 'path') return;
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    freeLook.yaw = (freeLook.yaw - dx * 0.35) % 360;
+    freeLook.heightScale = Math.min(6, Math.max(0.3, freeLook.heightScale * Math.exp(dy * 0.006)));
+  });
+  const end = (e) => {
+    if (drag && drag.id === e.pointerId) drag = null;
+  };
+  container.addEventListener('pointerup', end);
+  container.addEventListener('pointercancel', end);
+  container.addEventListener(
+    'wheel',
+    (e) => {
+      if (tour?.kind !== 'path') return;
+      e.preventDefault();
+      freeLook.distScale = Math.min(4, Math.max(0.3, freeLook.distScale * Math.exp(e.deltaY * 0.0015)));
+    },
+    { passive: false },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 視点プリセット (方角・角度・回転)
+// ---------------------------------------------------------------------------
+
+// 「北から見る」= カメラを北側に置いて南を向く
+const FROM_DIRECTION = { n: 180, e: 270, s: 0, w: 90 };
+const PITCH_PRESET = { top: 0, oblique: 55, low: 78 };
+
+function stopOrbitOnly() {
+  if (tour?.kind === 'orbit') stopTour();
+}
+
+document.querySelectorAll('[data-from]').forEach((b) =>
+  b.addEventListener('click', () => {
+    stopTour();
+    map.easeTo({ bearing: FROM_DIRECTION[b.dataset.from], duration: 1200 });
+  }),
+);
+document.querySelectorAll('[data-pitch]').forEach((b) =>
+  b.addEventListener('click', () => {
+    stopTour();
+    const pitch = PITCH_PRESET[b.dataset.pitch];
+    // 真上から見るときは全体が入るよう少し引く
+    const zoom = pitch === 0 ? Math.min(map.getZoom(), 14) : undefined;
+    map.easeTo({ pitch, zoom, duration: 1200 });
+  }),
+);
+
+// 押している間だけ回転・傾ける
+function holdButton(btn, onFrame) {
+  let frame = 0;
+  let last = 0;
+  const loop = (t) => {
+    const dt = Math.min(0.1, (t - last) / 1000 || 0);
+    last = t;
+    onFrame(dt);
+    frame = requestAnimationFrame(loop);
+  };
+  const start = (e) => {
+    e.preventDefault();
+    stopOrbitOnly();
+    last = performance.now();
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(loop);
+  };
+  const stop = () => cancelAnimationFrame(frame);
+  btn.addEventListener('pointerdown', start);
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, stop);
+}
+
+const ROTATE_SPEED = 45; // 度/秒
+const TILT_SPEED = 30;
+holdButton($('rot-left'), (dt) => {
+  if (tour?.kind === 'path') freeLook.yaw -= ROTATE_SPEED * dt;
+  else map.jumpTo({ bearing: map.getBearing() - ROTATE_SPEED * dt });
+});
+holdButton($('rot-right'), (dt) => {
+  if (tour?.kind === 'path') freeLook.yaw += ROTATE_SPEED * dt;
+  else map.jumpTo({ bearing: map.getBearing() + ROTATE_SPEED * dt });
+});
+holdButton($('tilt-up'), (dt) => {
+  if (tour?.kind === 'path') freeLook.heightScale = Math.min(6, freeLook.heightScale * Math.exp(dt * 1.2));
+  else map.jumpTo({ pitch: Math.max(0, map.getPitch() - TILT_SPEED * dt) });
+});
+holdButton($('tilt-down'), (dt) => {
+  if (tour?.kind === 'path') freeLook.heightScale = Math.max(0.3, freeLook.heightScale * Math.exp(-dt * 1.2));
+  else map.jumpTo({ pitch: Math.min(85, map.getPitch() + TILT_SPEED * dt) });
+});
+
 $('orbit').addEventListener('click', async () => {
   if (!current) return;
   stopTour();
   const token = {};
   tour = { frame: 0, token };
   stopBtn.disabled = false;
+  tour.kind = 'orbit';
   $('orbit').classList.add('active');
   hideInfo();
   setStatus(`空撮中: ${current.resort.name}`);
