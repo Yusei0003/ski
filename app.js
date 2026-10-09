@@ -16,7 +16,7 @@ const OVERPASS_ENDPOINTS = [
   'https://overpass.private.coffee/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
-const CACHE_PREFIX = 'ski3d:osm:v1:';
+const CACHE_PREFIX = 'ski3d:osm:v2:';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const DIFFICULTY = {
@@ -183,6 +183,8 @@ function buildQuery(bbox) {
 (
   way["piste:type"="downhill"](${b});
   way["aerialway"~"^(cable_car|gondola|mixed_lift|chair_lift|drag_lift|t-bar|j-bar|platter|rope_tow|magic_carpet)$"](${b});
+  way["landuse"="winter_sports"](${b});
+  relation["landuse"="winter_sports"](${b});
 );
 out geom;`;
 }
@@ -239,6 +241,7 @@ function toFeatures(osm) {
   for (const el of osm.elements || []) {
     if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
     const tags = el.tags || {};
+    if (tags.landuse === 'winter_sports') continue; // スキー場の範囲は buildAreas で扱う
     const coords = el.geometry.map((g) => [g.lon, g.lat]);
     const name = osmName(tags);
 
@@ -316,11 +319,103 @@ function chainSegments(segments) {
   return chains;
 }
 
+// ---------------------------------------------------------------------------
+// スキー場 (エリア内の個々のスキー場) の判定
+// ---------------------------------------------------------------------------
+
+function pointInRing(pt, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > pt[1] !== yj > pt[1] && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function ringArea(ring) {
+  let a = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) a += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
+  return Math.abs(a / 2);
+}
+
+// OSM の landuse=winter_sports (way / multipolygon relation) を名前付きの範囲にする
+function parseSkiAreaPolygons(osm) {
+  const polys = [];
+  for (const el of osm.elements || []) {
+    const tags = el.tags || {};
+    if (tags.landuse !== 'winter_sports') continue;
+    let rings = [];
+    if (el.type === 'way' && el.geometry) {
+      rings = [el.geometry.map((g) => [g.lon, g.lat])];
+    } else if (el.type === 'relation' && el.members) {
+      const outers = el.members
+        .filter((m) => m.type === 'way' && m.geometry && (m.role === 'outer' || m.role === ''))
+        .map((m) => m.geometry.map((g) => [g.lon, g.lat]));
+      rings = chainSegments(outers);
+    }
+    rings = rings.filter((r) => r.length >= 4);
+    if (!rings.length) continue;
+    polys.push({ name: tags['name:ja'] || tags.name || '', nameEn: tags['name:en'] || tags.name || '', rings });
+  }
+  return polys;
+}
+
+// エリア定義 (resorts.js の areas) と OSM の範囲を突き合わせて、スキー場の一覧を作る
+function buildAreas(osm, resort) {
+  const polys = parseSkiAreaPolygons(osm);
+  const areas = (resort.areas || []).map((a) => ({ name: a.name, match: a.match, fallbackCenter: a.center, rings: [] }));
+  for (const poly of polys) {
+    if (!poly.name && !poly.nameEn) continue;
+    const label = poly.name + ' ' + poly.nameEn;
+    let area = areas.find((a) => a.match && a.match.test(label));
+    if (!area) {
+      // 定義に無い名前付きのスキー場は自動で追加 (同名はまとめる)
+      area = areas.find((a) => a.name === poly.name) || { name: poly.name || poly.nameEn, rings: [] };
+      if (!areas.includes(area)) areas.push(area);
+    }
+    area.rings.push(...poly.rings);
+  }
+  return areas;
+}
+
+// 線の中点が含まれるスキー場の範囲 (複数なら一番小さい範囲)、無ければ最寄りのスキー場を返す
+function assignArea(coords, areas) {
+  const mid = coords[Math.floor(coords.length / 2)];
+  let best = null;
+  let bestArea = Infinity;
+  for (const area of areas) {
+    for (const ring of area.rings) {
+      if (pointInRing(mid, ring)) {
+        const a = ringArea(ring);
+        if (a < bestArea) {
+          bestArea = a;
+          best = area;
+        }
+      }
+    }
+  }
+  if (best) return best;
+  let nearest = null;
+  let nearestDist = 3000; // 3km 以上離れていれば「その他」
+  for (const area of areas) {
+    const points = area.rings.length ? area.rings.flat() : area.fallbackCenter ? [area.fallbackCenter] : [];
+    for (let i = 0; i < points.length; i += Math.max(1, Math.floor(points.length / 200))) {
+      const d = distance(mid, points[i]);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearest = area;
+      }
+    }
+  }
+  return nearest;
+}
+
 function buildRunList(features) {
   const groups = new Map();
   for (const f of features) {
     if (f.properties.kind !== 'run') continue;
-    const key = f.properties.name + '|' + f.properties.difficulty;
+    const key = f.properties.name + '|' + f.properties.difficulty + '|' + f.properties.area;
     if (!groups.has(key)) groups.set(key, { ...f.properties, segments: [] });
     groups.get(key).segments.push(f.geometry.coordinates);
   }
@@ -331,6 +426,7 @@ function buildRunList(features) {
       if (!g.name && length < 250) continue; // 名前の無い短い区間は一覧から除外
       runs.push({
         kind: 'run',
+        area: g.area,
         name: g.name || '名称なしコース',
         nameEn: g.nameEn,
         difficulty: g.difficulty,
@@ -725,7 +821,7 @@ function formatLength(m) {
   return m >= 1000 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
 }
 
-function renderList(el, items, describe, onClick, emptyText) {
+function renderList(el, items, describe, onClick, emptyText, groupByArea = false) {
   el.innerHTML = '';
   if (!items.length) {
     const li = document.createElement('li');
@@ -734,7 +830,15 @@ function renderList(el, items, describe, onClick, emptyText) {
     el.appendChild(li);
     return;
   }
+  let lastArea = null;
   for (const item of items) {
+    if (groupByArea && item.area !== lastArea) {
+      lastArea = item.area;
+      const header = document.createElement('li');
+      header.className = 'group';
+      header.textContent = item.area;
+      el.appendChild(header);
+    }
     const li = document.createElement('li');
     const { color, label, meta } = describe(item);
     li.innerHTML = `<span class="swatch" style="background:${color}"></span><span></span><span class="meta"></span>`;
@@ -757,6 +861,9 @@ async function selectResort(resort) {
   map.getSource('ski').setData({ type: 'FeatureCollection', features: [] });
   $('lifts').innerHTML = '';
   $('runs').innerHTML = '';
+  $('areas').innerHTML = '';
+  for (const m of areaMarkers) m.remove();
+  areaMarkers = [];
 
   let osm = readCache(resort.id);
   if (!osm) {
@@ -774,27 +881,140 @@ async function selectResort(resort) {
   if (token !== loadToken) return;
 
   const features = toFeatures(osm);
+  const areaList = buildAreas(osm, resort);
+  for (const f of features) {
+    const coords = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates;
+    f.properties.area = assignArea(coords, areaList)?.name || 'その他';
+  }
   const runs = buildRunList(features);
   const lifts = buildLiftList(features);
   const lineFeatures = features.filter((f) => f.geometry.type === 'LineString');
   const bounds = lineFeatures.length
     ? boundsOf(lineFeatures.map((f) => f.geometry.coordinates))
     : new maplibregl.LngLatBounds([resort.bbox[1], resort.bbox[0]], [resort.bbox[3], resort.bbox[2]]);
-  current = { resort, features, runs, lifts, bounds };
+
+  // コース・リフトのあるスキー場だけを、北から順に並べる
+  const areas = [];
+  for (const a of [...areaList, { name: 'その他', rings: [] }]) {
+    const own = lineFeatures.filter((f) => f.properties.area === a.name);
+    if (!own.length) continue;
+    const areaBounds = boundsOf(own.map((f) => f.geometry.coordinates));
+    areas.push({
+      name: a.name,
+      bounds: areaBounds,
+      labelAt: labelPosition(a, own, areaBounds),
+      runCount: runs.filter((r) => r.area === a.name).length,
+      liftCount: lifts.filter((l) => l.area === a.name).length,
+    });
+  }
+  areas.sort((a, b) => (a.name === 'その他') - (b.name === 'その他') || b.labelAt[1] - a.labelAt[1]);
+  current = { resort, features, runs, lifts, bounds, areas, area: null };
 
   map.getSource('ski').setData({ type: 'FeatureCollection', features });
   map.fitBounds(bounds, { padding: 60, pitch: 60, bearing: map.getBearing(), duration: 2500 });
 
+  renderAreaLabels();
+  renderAreaChips();
+  renderItemLists();
+  setStatus(
+    `${resort.name}: スキー場 ${areas.filter((a) => a.name !== 'その他').length} か所 / コース ${runs.length} 本 / リフト ${lifts.length} 本 (データ: OpenStreetMap)`,
+  );
+}
+
+// ラベルはスキー場の範囲の中心 (無ければリフト・コースの範囲の中心) に置く
+function labelPosition(area, own, areaBounds) {
+  if (area.rings.length) {
+    const biggest = area.rings.reduce((a, b) => (ringArea(b) > ringArea(a) ? b : a));
+    const c = boundsOf([biggest]).getCenter();
+    return [c.lng, c.lat];
+  }
+  const c = areaBounds.getCenter();
+  return [c.lng, c.lat];
+}
+
+// ---------------------------------------------------------------------------
+// スキー場名の表示と絞り込み
+// ---------------------------------------------------------------------------
+
+let areaMarkers = [];
+
+function renderAreaLabels() {
+  for (const m of areaMarkers) m.remove();
+  areaMarkers = [];
+  for (const area of current.areas) {
+    if (area.name === 'その他') continue;
+    const el = document.createElement('button');
+    el.className = 'area-label';
+    el.innerHTML = '<span class="area-name"></span><span class="area-meta"></span>';
+    el.children[0].textContent = area.name;
+    el.children[1].textContent = `コース${area.runCount}・リフト${area.liftCount}`;
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      focusArea(area);
+    });
+    const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat(area.labelAt).addTo(map);
+    marker._area = area;
+    areaMarkers.push(marker);
+  }
+  updateAreaLabelState();
+}
+
+function updateAreaLabelState() {
+  for (const m of areaMarkers) {
+    m.getElement().classList.toggle('active', current.area === m._area);
+    m.getElement().classList.toggle('dim', !!current.area && current.area !== m._area);
+  }
+}
+
+// フライト中はラベルが視界を遮るので隠す
+function setAreaLabelsVisible(visible) {
+  document.body.classList.toggle('hide-area-labels', !visible);
+}
+
+function renderAreaChips() {
+  const el = $('areas');
+  el.innerHTML = '';
+  const named = current.areas.filter((a) => a.name !== 'その他');
+  $('areas-section').hidden = named.length < 2;
+  const make = (label, area) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.classList.toggle('active', current.area === area);
+    b.addEventListener('click', () => (area ? focusArea(area) : focusArea(null)));
+    el.appendChild(b);
+  };
+  make('すべて', null);
+  for (const a of current.areas) make(a.name, a);
+}
+
+function focusArea(area) {
+  stopTour();
+  hideInfo();
+  current.area = area;
+  renderAreaChips();
+  renderItemLists();
+  updateAreaLabelState();
+  const b = area ? area.bounds : current.bounds;
+  map.fitBounds(b, { padding: 60, pitch: 60, bearing: map.getBearing(), duration: 2000, maxZoom: 15 });
+  if (area) setStatus(`${area.name}: コース ${area.runCount} 本 / リフト ${area.liftCount} 本`);
+}
+
+function renderItemLists() {
+  const inArea = (item) => !current.area || item.area === current.area.name;
+  const order = new Map(current.areas.map((a, i) => [a.name, i]));
+  const sortByArea = (items) =>
+    current.area ? items : items.slice().sort((a, b) => (order.get(a.area) ?? 99) - (order.get(b.area) ?? 99));
   renderList(
     $('lifts'),
-    lifts,
+    sortByArea(current.lifts.filter(inArea)),
     (l) => ({ color: '#ffd400', label: l.name, meta: `${LIFT_TYPES[l.liftType] || ''} ${formatLength(l.length)}` }),
     (l) => selectItem(l),
     'リフトのデータがありません',
+    !current.area,
   );
   renderList(
     $('runs'),
-    runs,
+    sortByArea(current.runs.filter(inArea)),
     (r) => ({
       color: r.color,
       label: r.name,
@@ -802,8 +1022,8 @@ async function selectResort(resort) {
     }),
     (r) => selectItem(r),
     'コースのデータがありません',
+    !current.area,
   );
-  setStatus(`${resort.name}: コース ${runs.length} 本 / リフト ${lifts.length} 本 (データ: OpenStreetMap)`);
 }
 
 // 地図上のコース・リフトにマウスを乗せると名前を表示し、クリックで詳細カードを開く
@@ -816,9 +1036,10 @@ for (const layer of ['runs-hit', 'lifts-hit']) {
     const sub =
       p.kind === 'lift' ? LIFT_TYPES[p.liftType] || 'リフト' : (DIFFICULTY[p.difficulty] || UNKNOWN_DIFFICULTY).label;
     const label = document.createElement('div');
-    label.innerHTML = '<b></b> <span></span>';
+    label.innerHTML = '<b></b> <span></span><div class="popup-area"></div>';
     label.children[0].textContent = p.name || (p.kind === 'lift' ? 'リフト' : '名称なしコース');
     label.children[1].textContent = sub;
+    label.children[2].textContent = p.area;
     hoverPopup.setLngLat(e.lngLat).setDOMContent(label).addTo(map);
   });
   map.on('mouseleave', layer, () => {
@@ -1015,6 +1236,7 @@ function renderInfo(item) {
 
   info.innerHTML = `
     <button class="close" aria-label="閉じる">×</button>
+    <div class="info-area">${escapeHtml(item.area || '')}</div>
     <div class="info-head">${badge}<h3>${escapeHtml(item.name)}</h3></div>
     ${item.nameEn ? `<div class="name-en">${escapeHtml(item.nameEn)}</div>` : ''}
     <p class="desc">${a ? escapeHtml(describe(item, a)) : item.analyzed ? '標高データを取得できませんでした。' : '地形データを読み込み中…'}</p>
@@ -1250,6 +1472,7 @@ $('reset-look').addEventListener('click', resetFreeLook);
 const INTERACTIONS = ['dragPan', 'dragRotate', 'scrollZoom', 'touchZoomRotate', 'touchPitch', 'doubleClickZoom', 'keyboard'];
 function setFreeLook(on) {
   for (const h of INTERACTIONS) map[h][on ? 'disable' : 'enable']();
+  setAreaLabelsVisible(!on);
   document.body.classList.toggle('free-look', on);
 }
 
@@ -1364,10 +1587,11 @@ $('orbit').addEventListener('click', async () => {
   tour.kind = 'orbit';
   $('orbit').classList.add('active');
   hideInfo();
-  setStatus(`空撮中: ${current.resort.name}`);
+  setStatus(`空撮中: ${current.area ? current.area.name : current.resort.name}`);
 
-  const center = current.bounds.getCenter();
-  map.fitBounds(current.bounds, { padding: 40, pitch: 65, bearing: map.getBearing(), duration: 2000 });
+  const orbitBounds = current.area ? current.area.bounds : current.bounds;
+  const center = orbitBounds.getCenter();
+  map.fitBounds(orbitBounds, { padding: 40, pitch: 65, bearing: map.getBearing(), duration: 2000 });
   await waitForIdle(3000);
   if (!tour || tour.token !== token) return;
   map.jumpTo({ center });
