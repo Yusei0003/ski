@@ -590,6 +590,7 @@ function applySeason(name) {
   map.setSky(season.sky);
   document.querySelectorAll('[data-season]').forEach((b) => b.classList.toggle('active', b.dataset.season === name));
   snowfall.setSeason(name);
+  if (typeof buildings3d !== 'undefined') buildings3d.setSeason(name);
 }
 
 const map = new maplibregl.Map({
@@ -912,6 +913,7 @@ speedInput.addEventListener('input', () => {
 exagInput.addEventListener('input', () => {
   $('exag-label').textContent = '×' + exagInput.value;
   map.setTerrain({ source: 'dem', exaggeration: Number(exagInput.value) });
+  buildings3d.refresh();
 });
 
 document.querySelectorAll('[data-season]').forEach((b) =>
@@ -975,6 +977,7 @@ async function selectResort(resort) {
   $('areas').innerHTML = '';
   for (const m of areaMarkers) m.remove();
   areaMarkers = [];
+  buildings3d.load(resort); // 建物の立体表示 (buildings.js、対応エリアのみ)
 
   const cached = readCache(resort.id);
   let osm = null;

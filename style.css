@@ -452,3 +452,37 @@ body.hide-area-labels .area-label { display: none; }
 @media (max-height: 500px) and (orientation: landscape) {
   #compare { top: 6px; right: max(52px, calc(env(safe-area-inset-right) + 46px)); width: 280px; max-height: calc(100% - 12px); }
 }
+
+/* 施設のラベル (建物の立体表示があるエリア。近づいたときだけ表示) */
+.poi-marker {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px 2px 4px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #1f2a37;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  transform-origin: bottom center;
+}
+.poi-marker::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  margin-left: -4px;
+  border: 4px solid transparent;
+  border-bottom: 0;
+  border-top-color: rgba(255, 255, 255, 0.92);
+}
+.poi-marker .poi-icon { font-size: 12px; }
+.poi-marker.poi-lift { background: #e65100; color: #fff; font-weight: bold; }
+.poi-marker.poi-lift::after { border-top-color: #e65100; }
+.poi-marker .poi-name:empty { display: none; }
+body.show-pois .poi-marker { display: flex; }
+body.show-pois .poi-marker.poi-hidden { display: none; }
+body.hide-area-labels .poi-marker { display: none; }

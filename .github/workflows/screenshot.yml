@@ -1,0 +1,50 @@
+# 本物の地図タイルでアプリの画面を撮影し、screenshots/ にコミットする (確認用)。
+# Actions タブの「Run workflow」から、撮影内容 (JSON) を指定して実行する。
+name: 画面の撮影
+
+on:
+  workflow_dispatch:
+    inputs:
+      shots:
+        description: '撮影内容 (scripts/screenshot.mjs の JSON)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: screenshot
+  cancel-in-progress: false
+
+jobs:
+  shoot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Playwright の準備
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+
+      - name: 撮影
+        env:
+          SHOTS: ${{ inputs.shots }}
+        run: |
+          npx --yes http-server@14.1.1 -p 8080 -s &
+          sleep 3
+          node scripts/screenshot.mjs http://localhost:8080 screenshots "$SHOTS"
+
+      - name: コミット
+        run: |
+          git add screenshots/
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "画面の撮影 ($(date -u +%Y-%m-%dT%H:%M))"
+          git push

@@ -77,6 +77,13 @@ window.RESORTS = [
     center: [140.98, 39.95],
     bbox: [39.9, 140.92, 40.01, 141.05],
     buildings: true, // 建物を立体表示する (data/appi-buildings.js)
+    // OSM に高さが無い・足りない主な建物の補正 (名前と照合)
+    buildingOverrides: [
+      // 安比のランドマークのタワー。OSM は 19 階、紹介記事では高さ約78m
+      { match: /Tower Building|タワー/, height: 78, levels: 19, levelHeight: 3.6 },
+      // 3階が最上階 (大浴場が最上階の3階にあると紹介されている)
+      { match: /InterContinental|インターコンチネンタル/, levels: 3, levelHeight: 4 },
+    ],
     areas: [{ name: '安比高原スキー場', match: /安比|appi/i, center: [140.98, 39.95] }],
     landmarks: [
       { name: '岩手山', lngLat: [141.0011, 39.8522], elevation: 2038 },
