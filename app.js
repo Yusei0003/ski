@@ -229,6 +229,11 @@ function osmName(tags) {
   return tags['name:ja'] || tags.name || tags['piste:name'] || tags['name:en'] || tags.ref || '';
 }
 
+function nameEn(tags, name) {
+  const en = tags['name:en'] || '';
+  return en && en !== name ? en : '';
+}
+
 function toFeatures(osm) {
   const features = [];
   for (const el of osm.elements || []) {
@@ -242,7 +247,16 @@ function toFeatures(osm) {
         type: 'Feature',
         id: el.id,
         geometry: { type: 'LineString', coordinates: coords },
-        properties: { kind: 'lift', name, liftType: tags.aerialway },
+        properties: {
+          kind: 'lift',
+          name,
+          nameEn: nameEn(tags, name),
+          liftType: tags.aerialway,
+          occupancy: tags['aerialway:occupancy'] || '',
+          duration: tags['aerialway:duration'] || '',
+          capacity: tags['aerialway:capacity'] || '',
+          description: tags.description || '',
+        },
       });
       continue;
     }
@@ -257,8 +271,12 @@ function toFeatures(osm) {
       properties: {
         kind: isArea ? 'run-area' : 'run',
         name,
+        nameEn: nameEn(tags, name),
         difficulty: tags['piste:difficulty'] || '',
         color: diff.color,
+        grooming: tags['piste:grooming'] || '',
+        lit: tags['piste:lit'] || tags.lit || '',
+        description: tags.description || '',
       },
     });
   }
@@ -311,7 +329,18 @@ function buildRunList(features) {
     for (const coords of chainSegments(g.segments)) {
       const length = lineLength(coords);
       if (!g.name && length < 250) continue; // 名前の無い短い区間は一覧から除外
-      runs.push({ name: g.name || '名称なしコース', difficulty: g.difficulty, color: g.color, coords, length });
+      runs.push({
+        kind: 'run',
+        name: g.name || '名称なしコース',
+        nameEn: g.nameEn,
+        difficulty: g.difficulty,
+        color: g.color,
+        grooming: g.grooming,
+        lit: g.lit,
+        description: g.description,
+        coords,
+        length,
+      });
     }
   }
   runs.sort((a, b) => {
@@ -326,8 +355,8 @@ function buildLiftList(features) {
   return features
     .filter((f) => f.properties.kind === 'lift')
     .map((f) => ({
+      ...f.properties,
       name: f.properties.name || LIFT_TYPES[f.properties.liftType] || 'リフト',
-      liftType: f.properties.liftType,
       coords: f.geometry.coordinates,
       length: lineLength(f.geometry.coordinates),
     }))
@@ -337,6 +366,56 @@ function buildLiftList(features) {
 // ---------------------------------------------------------------------------
 // 地図
 // ---------------------------------------------------------------------------
+
+// 季節ごとの見た目。地理院の航空写真は雪の無い時期のものなので、
+// 冬は写真を白っぽく加工し、雪面の陰影と圧雪ゲレンデの白い帯を重ねて雪景色を表現する。
+const SEASONS = {
+  winter: {
+    photo: {
+      'raster-saturation': -0.85,
+      'raster-brightness-min': 0.5,
+      'raster-brightness-max': 1,
+      'raster-contrast': 0.1,
+    },
+    snowLayers: 'visible',
+    sky: {
+      'sky-color': '#9fbfdf',
+      'horizon-color': '#e9eff5',
+      'fog-color': '#f1f4f7',
+      'sky-horizon-blend': 0.7,
+      'horizon-fog-blend': 0.6,
+      'fog-ground-blend': 0.6,
+      'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 12, 0],
+    },
+  },
+  summer: {
+    photo: {
+      'raster-saturation': 0,
+      'raster-brightness-min': 0,
+      'raster-brightness-max': 1,
+      'raster-contrast': 0,
+    },
+    snowLayers: 'none',
+    sky: {
+      'sky-color': '#7fb4e6',
+      'horizon-color': '#dcebf7',
+      'fog-color': '#eaf2f9',
+      'sky-horizon-blend': 0.6,
+      'horizon-fog-blend': 0.7,
+      'fog-ground-blend': 0.75,
+      'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 12, 0],
+    },
+  },
+};
+
+function applySeason(name) {
+  const season = SEASONS[name];
+  for (const [prop, value] of Object.entries(season.photo)) map.setPaintProperty('photo', prop, value);
+  for (const id of ['snow-shade', 'run-areas-snow', 'runs-snow']) map.setLayoutProperty(id, 'visibility', season.snowLayers);
+  map.setSky(season.sky);
+  document.querySelectorAll('[data-season]').forEach((b) => b.classList.toggle('active', b.dataset.season === name));
+  snowfall.setSeason(name);
+}
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -349,15 +428,7 @@ const map = new maplibregl.Map({
   style: {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
-    sky: {
-      'sky-color': '#7fb4e6',
-      'horizon-color': '#dcebf7',
-      'fog-color': '#eaf2f9',
-      'sky-horizon-blend': 0.6,
-      'horizon-fog-blend': 0.7,
-      'fog-ground-blend': 0.75,
-      'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 12, 0],
-    },
+    sky: SEASONS.winter.sky,
     sources: {
       photo: {
         type: 'raster',
@@ -374,6 +445,14 @@ const map = new maplibregl.Map({
         encoding: 'mapbox',
         attribution: GSI_ATTRIBUTION,
       },
+      // 陰影用。terrain と同じソースを共有すると解像度が落ちるので別ソースにする
+      'hillshade-dem': {
+        type: 'raster-dem',
+        tiles: ['gsidem://{z}/{x}/{y}'],
+        tileSize: 256,
+        maxzoom: 14,
+        encoding: 'mapbox',
+      },
       ski: {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -382,7 +461,41 @@ const map = new maplibregl.Map({
       highlight: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
     },
     layers: [
-      { id: 'photo', type: 'raster', source: 'photo' },
+      { id: 'background', type: 'background', paint: { 'background-color': '#f4f7fa' } },
+      { id: 'photo', type: 'raster', source: 'photo', paint: SEASONS.winter.photo },
+      {
+        id: 'snow-shade',
+        type: 'hillshade',
+        source: 'hillshade-dem',
+        paint: {
+          'hillshade-shadow-color': '#5a7ca6',
+          'hillshade-highlight-color': '#ffffff',
+          'hillshade-accent-color': '#9db8d6',
+          'hillshade-exaggeration': 0.45,
+          'hillshade-illumination-direction': 315,
+        },
+      },
+      // 冬: 圧雪されたゲレンデ (林の中の白い帯)
+      {
+        id: 'run-areas-snow',
+        type: 'fill',
+        source: 'ski',
+        filter: ['==', ['get', 'kind'], 'run-area'],
+        paint: { 'fill-color': '#ffffff', 'fill-opacity': 0.75 },
+      },
+      {
+        id: 'runs-snow',
+        type: 'line',
+        source: 'ski',
+        filter: ['==', ['get', 'kind'], 'run'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': ['interpolate', ['exponential', 2], ['zoom'], 12, 3, 16, 40, 19, 320],
+          'line-blur': ['interpolate', ['exponential', 2], ['zoom'], 12, 1, 16, 12, 19, 96],
+          'line-opacity': 0.9,
+        },
+      },
       {
         id: 'run-areas',
         type: 'fill',
@@ -431,6 +544,21 @@ const map = new maplibregl.Map({
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': '#00e5ff', 'line-width': 6, 'line-opacity': 0.75, 'line-blur': 1 },
       },
+      // クリック判定用の透明な太線
+      {
+        id: 'runs-hit',
+        type: 'line',
+        source: 'ski',
+        filter: ['==', ['get', 'kind'], 'run'],
+        paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 16 },
+      },
+      {
+        id: 'lifts-hit',
+        type: 'line',
+        source: 'ski',
+        filter: ['==', ['get', 'kind'], 'lift'],
+        paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 16 },
+      },
       {
         id: 'lift-labels',
         type: 'symbol',
@@ -470,9 +598,87 @@ map.addControl(new maplibregl.ScaleControl(), 'bottom-right');
 
 map.on('load', () => {
   map.setTerrain({ source: 'dem', exaggeration: Number(exagInput.value) });
+  applySeason('winter');
   const initial = RESORTS.find((r) => r.id === new URLSearchParams(location.search).get('resort')) || RESORTS[0];
   selectResort(initial);
 });
+
+// ---------------------------------------------------------------------------
+// 降雪エフェクト (地図の上に重ねたキャンバスに雪を描く)
+// ---------------------------------------------------------------------------
+
+const snowfall = (() => {
+  const canvas = document.getElementById('snow');
+  const ctx = canvas.getContext('2d');
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let enabled = !reduceMotion;
+  let season = 'winter';
+  let flakes = [];
+  let frame = 0;
+  let last = 0;
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = canvas.clientHeight * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const count = Math.round((canvas.clientWidth * canvas.clientHeight) / 9000);
+    flakes = Array.from({ length: count }, () => ({
+      x: Math.random() * canvas.clientWidth,
+      y: Math.random() * canvas.clientHeight,
+      r: 0.8 + Math.random() * 2.2,
+      v: 25 + Math.random() * 45,
+      phase: Math.random() * Math.PI * 2,
+    }));
+  }
+
+  function draw(time) {
+    const dt = Math.min(0.1, (time - last) / 1000 || 0);
+    last = time;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    for (const f of flakes) {
+      f.y += f.v * dt * (f.r / 2);
+      f.x += Math.sin(time / 1000 + f.phase) * 12 * dt;
+      if (f.y > h + 5) {
+        f.y = -5;
+        f.x = Math.random() * w;
+      }
+      ctx.moveTo(f.x + f.r, f.y);
+      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    frame = requestAnimationFrame(draw);
+  }
+
+  function update() {
+    const on = enabled && season === 'winter';
+    canvas.hidden = !on;
+    cancelAnimationFrame(frame);
+    if (on) {
+      resize();
+      last = performance.now();
+      frame = requestAnimationFrame(draw);
+    }
+  }
+
+  window.addEventListener('resize', () => !canvas.hidden && resize());
+  document.getElementById('snow-toggle').checked = enabled;
+  return {
+    setEnabled(v) {
+      enabled = v;
+      update();
+    },
+    setSeason(v) {
+      season = v;
+      document.getElementById('snow-toggle').disabled = v !== 'winter';
+      update();
+    },
+  };
+})();
 
 // ---------------------------------------------------------------------------
 // UI
@@ -500,6 +706,11 @@ exagInput.addEventListener('input', () => {
   $('exag-label').textContent = '×' + exagInput.value;
   map.setTerrain({ source: 'dem', exaggeration: Number(exagInput.value) });
 });
+
+document.querySelectorAll('[data-season]').forEach((b) =>
+  b.addEventListener('click', () => applySeason(b.dataset.season)),
+);
+$('snow-toggle').addEventListener('change', (e) => snowfall.setEnabled(e.target.checked));
 
 for (const resort of RESORTS) {
   const btn = document.createElement('button');
@@ -540,6 +751,7 @@ async function selectResort(resort) {
   document.querySelectorAll('.resort-btn').forEach((b) => b.classList.toggle('active', b.dataset.id === resort.id));
   history.replaceState(null, '', '?resort=' + resort.id);
   setHighlight(null);
+  hideInfo();
 
   map.flyTo({ center: resort.center, zoom: 12.5, pitch: 55, bearing: 0, duration: 3000, essential: true });
   map.getSource('ski').setData({ type: 'FeatureCollection', features: [] });
@@ -577,7 +789,7 @@ async function selectResort(resort) {
     $('lifts'),
     lifts,
     (l) => ({ color: '#ffd400', label: l.name, meta: `${LIFT_TYPES[l.liftType] || ''} ${formatLength(l.length)}` }),
-    (l) => startPathTour(l, 'up'),
+    (l) => selectItem(l),
     'リフトのデータがありません',
   );
   renderList(
@@ -588,26 +800,265 @@ async function selectResort(resort) {
       label: r.name,
       meta: `${(DIFFICULTY[r.difficulty] || UNKNOWN_DIFFICULTY).label} ${formatLength(r.length)}`,
     }),
-    (r) => startPathTour(r, 'down'),
+    (r) => selectItem(r),
     'コースのデータがありません',
   );
   setStatus(`${resort.name}: コース ${runs.length} 本 / リフト ${lifts.length} 本 (データ: OpenStreetMap)`);
 }
 
-// 地図上のコース・リフトをクリックしてもフライトを開始できるようにする
-for (const layer of ['runs', 'lifts']) {
-  map.on('mouseenter', layer, () => (map.getCanvas().style.cursor = 'pointer'));
-  map.on('mouseleave', layer, () => (map.getCanvas().style.cursor = ''));
+// 地図上のコース・リフトにマウスを乗せると名前を表示し、クリックで詳細カードを開く
+const hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, className: 'hover-popup', offset: 10 });
+
+for (const layer of ['runs-hit', 'lifts-hit']) {
+  map.on('mousemove', layer, (e) => {
+    map.getCanvas().style.cursor = 'pointer';
+    const p = e.features[0].properties;
+    const sub =
+      p.kind === 'lift' ? LIFT_TYPES[p.liftType] || 'リフト' : (DIFFICULTY[p.difficulty] || UNKNOWN_DIFFICULTY).label;
+    const label = document.createElement('div');
+    label.innerHTML = '<b></b> <span></span>';
+    label.children[0].textContent = p.name || (p.kind === 'lift' ? 'リフト' : '名称なしコース');
+    label.children[1].textContent = sub;
+    hoverPopup.setLngLat(e.lngLat).setDOMContent(label).addTo(map);
+  });
+  map.on('mouseleave', layer, () => {
+    map.getCanvas().style.cursor = '';
+    hoverPopup.remove();
+  });
   map.on('click', layer, (e) => {
     if (!current) return;
     const f = e.features[0];
-    const list = layer === 'runs' ? current.runs : current.lifts;
-    const name = f.properties.name;
-    const match =
-      list.find((item) => item.name === name && item.coords.some((c) => distance(c, [e.lngLat.lng, e.lngLat.lat]) < 300)) ||
-      list.find((item) => item.name === name);
-    if (match) startPathTour(match, layer === 'runs' ? 'down' : 'up');
+    const list = layer === 'runs-hit' ? current.runs : current.lifts;
+    const name = f.properties.kind === 'lift' ? f.properties.name || LIFT_TYPES[f.properties.liftType] || 'リフト' : f.properties.name || '名称なしコース';
+    const click = [e.lngLat.lng, e.lngLat.lat];
+    const nearest = (item) => Math.min(...item.coords.map((c) => distance(c, click)));
+    const candidates = list.filter((item) => item.name === name);
+    const match = candidates.sort((a, b) => nearest(a) - nearest(b))[0];
+    if (match) selectItem(match);
   });
+}
+
+// ---------------------------------------------------------------------------
+// コース・リフトの詳細 (標高プロファイル・斜度の計算と説明文)
+// ---------------------------------------------------------------------------
+
+const GROOMING = {
+  classic: '圧雪',
+  skating: '圧雪',
+  'classic+skating': '圧雪',
+  mogul: 'コブ',
+  backcountry: '非圧雪',
+  no: '非圧雪',
+};
+// 所要時間の目安に使う平均速度 [m/s]
+const LIFT_SPEED = {
+  cable_car: 8,
+  gondola: 5,
+  mixed_lift: 5,
+  chair_lift: 2.3,
+  drag_lift: 3,
+  't-bar': 3,
+  'j-bar': 3,
+  platter: 3,
+  rope_tow: 2,
+  magic_carpet: 0.6,
+};
+
+let selected = null; // 詳細カードに表示中の item
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+// 経路を 20m 間隔で標高サンプリングし、向きを揃えて斜度などを計算する。
+// 地形タイルが読み込まれている必要があるので、経路を画面に収めて idle を待ってから呼ぶ。
+function analyzePath(item) {
+  const exag = Number(exagInput.value);
+  const direction = item.kind === 'lift' ? 'up' : 'down';
+  let coords = item.coords;
+  const first = elevationAt(coords[0], null);
+  const last = elevationAt(coords.at(-1), null);
+  if (first == null || last == null) return null;
+  if ((direction === 'down' && first < last) || (direction === 'up' && first > last)) coords = coords.slice().reverse();
+
+  const path = makePathSampler(coords);
+  const n = Math.max(2, Math.min(400, Math.ceil(path.total / 20) + 1));
+  const profile = [];
+  let prev = first / exag;
+  for (let i = 0; i < n; i++) {
+    const d = (path.total * i) / (n - 1);
+    const e = elevationAt(path.at(d), null);
+    const h = e == null ? prev : e / exag;
+    profile.push({ d, h });
+    prev = h;
+  }
+
+  // 約40m区間ごとの斜度 (DEM のノイズを抑えるため隣接2点ではなく1つ飛ばしで計算)
+  let maxSlope = 0;
+  let maxSlopeAt = 0;
+  for (let i = 0; i + 2 < profile.length; i++) {
+    const dd = profile[i + 2].d - profile[i].d;
+    if (dd <= 0) continue;
+    const slope = toDeg(Math.atan(Math.abs(profile[i + 2].h - profile[i].h) / dd));
+    if (slope > maxSlope) {
+      maxSlope = slope;
+      maxSlopeAt = (profile[i].d + dd / 2) / path.total;
+    }
+  }
+  const hs = profile.map((p) => p.h);
+  const top = Math.max(...hs);
+  const bottom = Math.min(...hs);
+  const drop = Math.abs(profile.at(-1).h - profile[0].h);
+  return {
+    coords,
+    profile,
+    total: path.total,
+    top,
+    bottom,
+    drop,
+    maxSlope,
+    maxSlopeAt,
+    avgSlope: toDeg(Math.atan(drop / path.total)),
+  };
+}
+
+function describe(item, a) {
+  const len = formatLength(item.length);
+  const drop = Math.round(a.drop);
+  if (item.kind === 'lift') {
+    const type = LIFT_TYPES[item.liftType] || 'リフト';
+    const minutes = Number(item.duration) || Math.max(1, Math.round(item.length / (LIFT_SPEED[item.liftType] || 2.5) / 60));
+    return `全長${len}・標高差約${drop}mを上る${type}。乗車時間は約${minutes}分${item.duration ? '' : '(目安)'}。`;
+  }
+  const level = {
+    novice: '初心者向け',
+    easy: '初級者向け',
+    intermediate: '中級者向け',
+    advanced: '上級者向け',
+    expert: 'エキスパート向け',
+    extreme: 'エキスパート向け',
+    freeride: '上級者向けの非圧雪',
+  }[item.difficulty];
+  const size = item.length >= 2500 ? 'ロングコース' : item.length >= 800 ? 'コース' : '短めのコース';
+  const parts = [`${level ? level + 'の、' : ''}全長${len}・標高差約${drop}mの${size}。`];
+  const m = a.maxSlope;
+  if (m < 10) parts.push('全体を通して緩やかで、のんびり滑れます。');
+  else if (m < 18) parts.push('適度な斜度で、ターンの練習にぴったりです。');
+  else if (m < 25) parts.push('しっかりした斜度の区間があり、滑りごたえがあります。');
+  else if (m < 32) parts.push('急斜面があり、確実なターン技術が必要です。');
+  else parts.push('かなりの急斜面があり、上級者向けです。');
+  if (m >= 10) {
+    const where = a.maxSlopeAt < 0.33 ? '上部' : a.maxSlopeAt < 0.67 ? '中盤' : '下部';
+    parts.push(`いちばん急なのは${where}で、約${Math.round(m)}°。`);
+  }
+  if (item.grooming === 'mogul') parts.push('コブ斜面があります。');
+  if (item.grooming === 'backcountry' || item.grooming === 'no') parts.push('圧雪されていない非圧雪コースです。');
+  if (item.lit === 'yes') parts.push('ナイター営業の対象です。');
+  return parts.join('');
+}
+
+function profileSvg(a, color) {
+  const W = 300;
+  const H = 96;
+  const PAD = { l: 34, r: 6, t: 8, b: 16 };
+  const range = Math.max(10, a.top - a.bottom);
+  const x = (d) => PAD.l + (d / a.total) * (W - PAD.l - PAD.r);
+  const y = (h) => PAD.t + (1 - (h - a.bottom) / range) * (H - PAD.t - PAD.b);
+  const line = a.profile.map((p) => `${x(p.d).toFixed(1)},${y(p.h).toFixed(1)}`).join(' ');
+  const area = `${x(0)},${H - PAD.b} ${line} ${x(a.total)},${H - PAD.b}`;
+  return `<svg viewBox="0 0 ${W} ${H}" class="profile" role="img" aria-label="標高プロファイル">
+    <polygon points="${area}" fill="${color}" fill-opacity="0.15"/>
+    <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>
+    <line x1="${PAD.l}" y1="${H - PAD.b}" x2="${W - PAD.r}" y2="${H - PAD.b}" stroke="#c5cdd6"/>
+    <text x="${PAD.l - 4}" y="${y(a.top) + 4}" text-anchor="end">${Math.round(a.top)}</text>
+    <text x="${PAD.l - 4}" y="${y(a.bottom) + 4}" text-anchor="end">${Math.round(a.bottom)}</text>
+    <text x="${PAD.l}" y="${H - 3}">0</text>
+    <text x="${W - PAD.r}" y="${H - 3}" text-anchor="end">${formatLength(a.total)}</text>
+    <circle id="profile-marker" r="4.5" cx="${x(0)}" cy="${y(a.profile[0].h)}" fill="#00b8d4" stroke="#fff" stroke-width="1.5" visibility="hidden"/>
+  </svg>`;
+}
+
+function updateProfileMarker(item, d) {
+  const marker = document.getElementById('profile-marker');
+  if (!marker || selected !== item || !item.analysis) return;
+  const a = item.analysis;
+  const svg = marker.ownerSVGElement.viewBox.baseVal;
+  const i = Math.min(a.profile.length - 1, Math.round((d / a.total) * (a.profile.length - 1)));
+  const range = Math.max(10, a.top - a.bottom);
+  marker.setAttribute('cx', 34 + (d / a.total) * (svg.width - 40));
+  marker.setAttribute('cy', 8 + (1 - (a.profile[i].h - a.bottom) / range) * (svg.height - 24));
+  marker.setAttribute('visibility', 'visible');
+}
+
+function renderInfo(item) {
+  const info = $('info');
+  const a = item.analysis;
+  const isLift = item.kind === 'lift';
+  const diff = DIFFICULTY[item.difficulty] || UNKNOWN_DIFFICULTY;
+  const badge = isLift
+    ? `<span class="badge" style="background:#ffd400;color:#222">${escapeHtml(LIFT_TYPES[item.liftType] || 'リフト')}</span>`
+    : `<span class="badge" style="background:${diff.color}">${diff.label}</span>`;
+
+  const stats = [['全長', formatLength(item.length)]];
+  if (a) {
+    stats.push(['標高差', `${Math.round(a.drop)} m`]);
+    stats.push([isLift ? '山頂側' : 'スタート', `${Math.round(isLift ? a.profile.at(-1).h : a.profile[0].h)} m`]);
+    stats.push([isLift ? '山麓側' : 'ゴール', `${Math.round(isLift ? a.profile[0].h : a.profile.at(-1).h)} m`]);
+    if (!isLift) {
+      stats.push(['最大斜度', `約${Math.round(a.maxSlope)}°`]);
+      stats.push(['平均斜度', `約${Math.round(a.avgSlope)}°`]);
+    }
+  }
+  if (isLift && item.occupancy) stats.push(['定員', `${item.occupancy}人乗り`]);
+  if (!isLift && GROOMING[item.grooming]) stats.push(['整備', GROOMING[item.grooming]]);
+  if (!isLift && item.lit === 'yes') stats.push(['ナイター', 'あり']);
+
+  info.innerHTML = `
+    <button class="close" aria-label="閉じる">×</button>
+    <div class="info-head">${badge}<h3>${escapeHtml(item.name)}</h3></div>
+    ${item.nameEn ? `<div class="name-en">${escapeHtml(item.nameEn)}</div>` : ''}
+    <p class="desc">${a ? escapeHtml(describe(item, a)) : item.analyzed ? '標高データを取得できませんでした。' : '地形データを読み込み中…'}</p>
+    ${item.description ? `<p class="osm-desc">${escapeHtml(item.description)}</p>` : ''}
+    <dl class="stats">${stats.map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}</dl>
+    ${a ? profileSvg(a, isLift ? '#d4a800' : diff.color === '#111111' ? '#333' : diff.color) : ''}
+    <button class="go">${isLift ? '🚡 乗ってみる' : '⛷ このコースを滑る'}</button>
+    <p class="note">標高・斜度は国土地理院の標高データ(約10mメッシュ)からの推定値。コース情報は OpenStreetMap。</p>`;
+  info.hidden = false;
+  info.querySelector('.close').addEventListener('click', () => {
+    stopTour();
+    hideInfo();
+  });
+  info.querySelector('.go').addEventListener('click', () => startPathTour(item));
+}
+
+function hideInfo() {
+  selected = null;
+  $('info').hidden = true;
+  setHighlight(null);
+}
+
+async function selectItem(item) {
+  stopTour();
+  selected = item;
+  setHighlight(item.coords);
+  renderInfo(item);
+  await ensureAnalysis(item);
+  if (selected === item) renderInfo(item);
+}
+
+// 経路を画面に収めて地形を読み込ませ、標高プロファイルを計算する (結果は item にキャッシュ)
+async function ensureAnalysis(item) {
+  map.fitBounds(boundsOf([item.coords]), {
+    padding: { top: 80, bottom: 80, left: 80, right: 80 },
+    pitch: 55,
+    bearing: map.getBearing(),
+    duration: 1500,
+    maxZoom: 15.5,
+  });
+  await waitForIdle();
+  if (!item.analysis) item.analysis = analyzePath(item);
+  item.analyzed = true;
+  return item.analysis;
 }
 
 function setHighlight(coords) {
@@ -652,30 +1103,26 @@ function elevationAt(lngLat, fallback) {
   return e == null || Number.isNaN(e) ? fallback : e;
 }
 
-// direction: 'down' = 標高の高い方から低い方へ, 'up' = 低い方から高い方へ
-async function startPathTour(item, direction) {
+// コースは標高の高い方から低い方へ、リフトは低い方から高い方へ進む
+async function startPathTour(item) {
   stopTour();
   const token = {};
   tour = { frame: 0, token };
   stopBtn.disabled = false;
-  setHighlight(item.coords);
-  setStatus(`${direction === 'up' ? '乗車中' : '滑走中'}: ${item.name}`);
-
-  // 経路全体を表示して標高タイルを読み込ませる
-  const bounds = boundsOf([item.coords]);
-  map.fitBounds(bounds, { padding: 80, pitch: 55, duration: 1500, maxZoom: 15.5 });
-  await waitForIdle();
-  if (!tour || tour.token !== token) return;
-
-  let coords = item.coords;
-  const startElev = elevationAt(coords[0], 0);
-  const endElev = elevationAt(coords.at(-1), 0);
-  if ((direction === 'down' && startElev < endElev) || (direction === 'up' && startElev > endElev)) {
-    coords = coords.slice().reverse();
+  const isLift = item.kind === 'lift';
+  if (selected !== item) {
+    selected = item;
+    renderInfo(item);
   }
+  setHighlight(item.coords);
+  setStatus(`${isLift ? '乗車中' : '滑走中'}: ${item.name}`);
+
+  const analysis = item.analysis || (await ensureAnalysis(item));
+  if (!tour || tour.token !== token) return;
+  if (selected === item) renderInfo(item);
+  const coords = analysis ? analysis.coords : item.coords;
 
   const path = makePathSampler(coords);
-  const isLift = direction === 'up';
   const BACK = isLift ? 180 : 160; // カメラを置く後方距離 [m]
   const CLEARANCE = isLift ? 45 : 50; // 地面からのカメラ高度 [m]
   const baseSpeed = isLift ? 12 : 18; // [m/s] 実際より速め
@@ -690,6 +1137,7 @@ async function startPathTour(item, direction) {
     const dt = lastTime == null ? 0 : Math.min(0.1, (time - lastTime) / 1000);
     lastTime = time;
     d += baseSpeed * Number(speedInput.value) * dt;
+    updateProfileMarker(item, Math.min(d, path.total));
 
     if (d >= path.total) {
       stopTour();
@@ -728,7 +1176,7 @@ $('orbit').addEventListener('click', async () => {
   tour = { frame: 0, token };
   stopBtn.disabled = false;
   $('orbit').classList.add('active');
-  setHighlight(null);
+  hideInfo();
   setStatus(`空撮中: ${current.resort.name}`);
 
   const center = current.bounds.getCenter();
